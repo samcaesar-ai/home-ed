@@ -7,6 +7,10 @@ import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { getTaskForDate } from "../db";
+import { getStudentById } from "../db";
+import { generateMathsPDF, generateEnglishPDF } from "../pdfGenerator";
+import type { MathsContent, EnglishContent } from "../../drizzle/schema";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -35,6 +39,28 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
+  // ─── PDF download endpoint ──────────────────────────────────────────────────
+  app.get("/api/pdf/:studentId/:subject/:date", async (req, res) => {
+    try {
+      const studentId = parseInt(req.params.studentId, 10);
+      const subject = req.params.subject as "maths" | "english";
+      const date = req.params.date;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { res.status(400).json({ error: "Invalid date" }); return; }
+      const student = await getStudentById(studentId);
+      if (!student) { res.status(404).json({ error: "Student not found" }); return; }
+      const task = await getTaskForDate(studentId, date, subject);
+      if (!task) { res.status(404).json({ error: "No task found for this date" }); return; }
+      if (subject === "maths") {
+        generateMathsPDF(res, student.name, date, task.content as MathsContent);
+      } else {
+        generateEnglishPDF(res, student.name, date, task.content as EnglishContent);
+      }
+    } catch (err) {
+      console.error("[PDF] Error:", err);
+      if (!res.headersSent) res.status(500).json({ error: "PDF generation failed" });
+    }
+  });
+
   // tRPC API
   app.use(
     "/api/trpc",
