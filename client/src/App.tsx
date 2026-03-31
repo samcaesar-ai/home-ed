@@ -5,6 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
+import Login from "./pages/Login";
 import TaskView from "./pages/TaskView";
 import ParentDashboard from "./pages/ParentDashboard";
 import ParentSettings from "./pages/ParentSettings";
@@ -13,6 +14,7 @@ import ParentReview from "./pages/ParentReview";
 function Router() {
   return (
     <Switch>
+      <Route path="/login" component={Login} />
       {/* Kids routes */}
       <Route path="/" component={Home} />
       <Route path="/tasks/:studentId/:subject" component={TaskView} />

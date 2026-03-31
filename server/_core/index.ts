@@ -8,7 +8,7 @@ import { getTaskForDate, getStudentById } from "../db";
 import type { EnglishContent, MathsContent } from "../../drizzle/schema";
 import { generateEnglishPDF, generateMathsPDF } from "../pdfGenerator";
 import { createContext } from "./context";
-import { registerOAuthRoutes } from "./oauth";
+import { registerAuthRoutes } from "./oauth";
 import { serveStatic, setupVite } from "./vite";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -35,8 +35,8 @@ function registerAppRoutes(app: Express) {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-  // OAuth callback under /api/oauth/callback
-  registerOAuthRoutes(app);
+  // Auth routes (password login)
+  registerAuthRoutes(app);
 
   // PDF download endpoint
   app.get("/api/pdf/:studentId/:subject/:date", async (req, res) => {
@@ -104,16 +104,10 @@ export async function createApp(options?: { includeFrontend?: boolean; server?: 
 }
 
 async function startServer() {
-  const app = express();
-  const server = createServer(app);
+  const server = createServer();
+  const app = await createApp({ includeFrontend: true, server });
 
-  registerAppRoutes(app);
-
-  if (process.env.NODE_ENV === "development") {
-    await setupVite(app, server);
-  } else {
-    serveStatic(app);
-  }
+  server.on("request", app);
 
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);
