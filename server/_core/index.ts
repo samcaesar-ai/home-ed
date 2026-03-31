@@ -1,19 +1,18 @@
 import "dotenv/config";
-import express from "express";
-import { createServer } from "http";
-import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes } from "./oauth";
+import express, { type Express } from "express";
+import { createServer, type Server as HttpServer } from "http";
+import net from "net";
 import { appRouter } from "../routers";
+import { getTaskForDate, getStudentById } from "../db";
+import type { EnglishContent, MathsContent } from "../../drizzle/schema";
+import { generateEnglishPDF, generateMathsPDF } from "../pdfGenerator";
 import { createContext } from "./context";
+import { registerOAuthRoutes } from "./oauth";
 import { serveStatic, setupVite } from "./vite";
-import { getTaskForDate } from "../db";
-import { getStudentById } from "../db";
-import { generateMathsPDF, generateEnglishPDF } from "../pdfGenerator";
-import type { MathsContent, EnglishContent } from "../../drizzle/schema";
 
 function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const server = net.createServer();
     server.listen(port, () => {
       server.close(() => resolve(true));
@@ -31,25 +30,38 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
   throw new Error(`No available port found starting from ${startPort}`);
 }
 
-async function startServer() {
-  const app = express();
-  const server = createServer(app);
+function registerAppRoutes(app: Express) {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
-  // ─── PDF download endpoint ──────────────────────────────────────────────────
+
+  // PDF download endpoint
   app.get("/api/pdf/:studentId/:subject/:date", async (req, res) => {
     try {
       const studentId = parseInt(req.params.studentId, 10);
       const subject = req.params.subject as "maths" | "english";
       const date = req.params.date;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { res.status(400).json({ error: "Invalid date" }); return; }
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        res.status(400).json({ error: "Invalid date" });
+        return;
+      }
+
       const student = await getStudentById(studentId);
-      if (!student) { res.status(404).json({ error: "Student not found" }); return; }
+      if (!student) {
+        res.status(404).json({ error: "Student not found" });
+        return;
+      }
+
       const task = await getTaskForDate(studentId, date, subject);
-      if (!task) { res.status(404).json({ error: "No task found for this date" }); return; }
+      if (!task) {
+        res.status(404).json({ error: "No task found for this date" });
+        return;
+      }
+
       if (subject === "maths") {
         generateMathsPDF(res, student.name, date, task.content as MathsContent);
       } else {
@@ -57,7 +69,9 @@ async function startServer() {
       }
     } catch (err) {
       console.error("[PDF] Error:", err);
-      if (!res.headersSent) res.status(500).json({ error: "PDF generation failed" });
+      if (!res.headersSent) {
+        res.status(500).json({ error: "PDF generation failed" });
+      }
     }
   });
 
@@ -69,7 +83,32 @@ async function startServer() {
       createContext,
     })
   );
-  // development mode uses Vite, production mode uses static files
+}
+
+export async function createApp(options?: { includeFrontend?: boolean; server?: HttpServer }) {
+  const app = express();
+  registerAppRoutes(app);
+
+  if (options?.includeFrontend !== false) {
+    if (process.env.NODE_ENV === "development") {
+      if (!options?.server) {
+        throw new Error("Development mode requires an HTTP server instance");
+      }
+      await setupVite(app, options.server);
+    } else {
+      serveStatic(app);
+    }
+  }
+
+  return app;
+}
+
+async function startServer() {
+  const app = express();
+  const server = createServer(app);
+
+  registerAppRoutes(app);
+
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
   } else {
@@ -88,4 +127,6 @@ async function startServer() {
   });
 }
 
-startServer().catch(console.error);
+if (process.env.VERCEL !== "1") {
+  startServer().catch(console.error);
+}
