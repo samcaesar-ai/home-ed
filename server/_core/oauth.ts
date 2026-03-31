@@ -2,52 +2,50 @@ import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import type { Express, Request, Response } from "express";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
+import { ENV } from "./env";
 import { sdk } from "./sdk";
+import { nanoid } from "nanoid";
 
-function getQueryParam(req: Request, key: string): string | undefined {
-  const value = req.query[key];
-  return typeof value === "string" ? value : undefined;
-}
+export function registerAuthRoutes(app: Express) {
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
+    const { password } = req.body ?? {};
 
-export function registerOAuthRoutes(app: Express) {
-  app.get("/api/oauth/callback", async (req: Request, res: Response) => {
-    const code = getQueryParam(req, "code");
-    const state = getQueryParam(req, "state");
-
-    if (!code || !state) {
-      res.status(400).json({ error: "code and state are required" });
+    if (!password || password !== ENV.authPassword) {
+      res.status(401).json({ error: "Invalid password" });
       return;
     }
 
     try {
-      const tokenResponse = await sdk.exchangeCodeForToken(code, state);
-      const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
+      // Ensure an admin user exists
+      let user = await db.getUserByOpenId("admin");
+      if (!user) {
+        await db.upsertUser({
+          openId: "admin",
+          name: "Parent",
+          email: null,
+          loginMethod: "password",
+          lastSignedIn: new Date(),
+        });
+        user = await db.getUserByOpenId("admin");
+      }
 
-      if (!userInfo.openId) {
-        res.status(400).json({ error: "openId missing from user info" });
+      if (!user) {
+        res.status(500).json({ error: "Failed to create user" });
         return;
       }
 
-      await db.upsertUser({
-        openId: userInfo.openId,
-        name: userInfo.name || null,
-        email: userInfo.email ?? null,
-        loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
-        lastSignedIn: new Date(),
-      });
-
-      const sessionToken = await sdk.createSessionToken(userInfo.openId, {
-        name: userInfo.name || "",
+      const sessionToken = await sdk.createSessionToken(user.openId, {
+        name: user.name || "Parent",
         expiresInMs: ONE_YEAR_MS,
       });
 
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
-      res.redirect(302, "/");
+      res.json({ ok: true });
     } catch (error) {
-      console.error("[OAuth] Callback failed", error);
-      res.status(500).json({ error: "OAuth callback failed" });
+      console.error("[Auth] Login failed", error);
+      res.status(500).json({ error: "Login failed" });
     }
   });
 }

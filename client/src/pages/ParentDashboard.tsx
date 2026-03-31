@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { getLoginUrl } from "@/const";
+import { LOGIN_PATH } from "@/const";
 import type { MathsContent, EnglishContent } from "../../../drizzle/schema";
 
 function todayString() {
@@ -166,7 +166,7 @@ export default function ParentDashboard() {
           </p>
           <Button
             className="w-full bg-indigo-600 hover:bg-indigo-700"
-            onClick={() => window.location.href = getLoginUrl()}
+            onClick={() => window.location.href = LOGIN_PATH}
           >
             <LogIn className="w-4 h-4 mr-2" />
             Sign In
