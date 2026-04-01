@@ -21,7 +21,13 @@ let _db: ReturnType<typeof drizzle> | null = null;
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      const client = postgres(process.env.DATABASE_URL);
+      const dbUrl = process.env.DATABASE_URL;
+      // Add SSL for cloud databases (Neon, Supabase, TiDB, etc.)
+      const needsSsl = dbUrl.includes('neon.tech') || dbUrl.includes('supabase') ||
+        dbUrl.includes('tidbcloud') || dbUrl.includes('sslmode=require') ||
+        dbUrl.includes('amazonaws.com') || dbUrl.includes('cockroachlabs');
+      const client = postgres(dbUrl, needsSsl ? { ssl: 'require' } : {});
+      console.log('[Database] Connecting, SSL:', needsSsl, 'URL prefix:', dbUrl.substring(0, 30));
       _db = drizzle(client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
