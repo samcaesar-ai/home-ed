@@ -81,6 +81,12 @@ function registerAppRoutes(app: Express) {
     createExpressMiddleware({
       router: appRouter,
       createContext,
+      onError({ error, path }) {
+        if (error.code === 'INTERNAL_SERVER_ERROR') {
+          const cause = (error.cause as any)?.cause ?? error.cause;
+          console.error(`[tRPC] ${path} error:`, error.message, cause ? `\nCause: ${String(cause)}` : '');
+        }
+      },
     })
   );
 }
