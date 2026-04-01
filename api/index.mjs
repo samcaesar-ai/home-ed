@@ -713,7 +713,7 @@ async function callOpenAI(req) {
 async function callClaude(req) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
-  const model = "claude-3-haiku-20240307";
+  const model = "claude-haiku-4-5-20251001";
   const systemMsg = req.messages.find((m) => m.role === "system")?.content ?? "";
   const userMessages = req.messages.filter((m) => m.role !== "system").map((m) => ({ role: m.role, content: m.content }));
   const messagesWithInstruction = userMessages.map((m, i) => {
@@ -754,7 +754,7 @@ IMPORTANT: Return ONLY valid JSON matching the schema. No markdown, no extra tex
 async function callGemini(req) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
-  const model = "gemini-1.5-flash";
+  const model = "gemini-2.5-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const systemMsg = req.messages.find((m) => m.role === "system")?.content ?? "";
   const userMessages = req.messages.filter((m) => m.role !== "system");
@@ -1954,7 +1954,7 @@ function registerAppRoutes(app2) {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({ model: "claude-3-haiku-20240307", max_tokens: 10, messages: [{ role: "user", content: "Reply with the single word: hello" }] }),
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 10, messages: [{ role: "user", content: "Reply with the single word: hello" }] }),
         signal: AbortSignal.timeout(15e3)
       });
       const text2 = await r.text();
@@ -1963,7 +1963,7 @@ function registerAppRoutes(app2) {
       results.claude = { ok: false, error: String(e) };
     }
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY ?? ""}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY ?? ""}`;
       const r = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1975,7 +1975,7 @@ function registerAppRoutes(app2) {
     } catch (e) {
       results.gemini = { ok: false, error: String(e) };
     }
-    res.json({ version: "c33cbc1-claude-3-haiku", envKeys: { openai: !!ENV.openaiApiKey, claude: !!process.env.ANTHROPIC_API_KEY, gemini: !!process.env.GEMINI_API_KEY, openaiUrl: ENV.openaiApiUrl || "(default)" }, results });
+    res.json({ version: "68c965d-claude-haiku-4-5-gemini-2.5-flash", envKeys: { openai: !!ENV.openaiApiKey, claude: !!process.env.ANTHROPIC_API_KEY, gemini: !!process.env.GEMINI_API_KEY, openaiUrl: ENV.openaiApiUrl || "(default)" }, results });
   });
   app2.get("/api/pdf/:studentId/:subject/:date", async (req, res) => {
     try {

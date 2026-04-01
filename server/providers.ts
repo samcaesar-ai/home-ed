@@ -87,7 +87,7 @@ async function callClaude(req: ProviderRequest): Promise<ProviderResponse> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
 
-  const model = "claude-3-haiku-20240307";
+  const model = "claude-haiku-4-5-20251001";
 
   // Claude uses a separate system message field
   const systemMsg = req.messages.find((m) => m.role === "system")?.content ?? "";
@@ -140,7 +140,7 @@ async function callGemini(req: ProviderRequest): Promise<ProviderResponse> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
 
-  const model = "gemini-1.5-flash";
+  const model = "gemini-2.5-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   // Gemini uses a different message format
