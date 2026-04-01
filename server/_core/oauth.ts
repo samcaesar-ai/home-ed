@@ -42,8 +42,9 @@ export function registerAuthRoutes(app: Express) {
 
       res.json({ ok: true });
     } catch (error) {
-      console.error("[Auth] Login failed", error);
-      res.status(500).json({ error: "Login failed" });
+      const msg = (error as Error)?.message ?? String(error);
+      console.error("[Auth] Login failed:", msg);
+      res.status(500).json({ error: `Login failed: ${msg}` });
     }
   });
 }
