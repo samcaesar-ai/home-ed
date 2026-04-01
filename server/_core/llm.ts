@@ -209,10 +209,20 @@ const normalizeToolChoice = (
   return toolChoice;
 };
 
-const resolveApiUrl = () =>
-  ENV.openaiApiUrl && ENV.openaiApiUrl.trim().length > 0
-    ? `${ENV.openaiApiUrl.replace(/\/$/, "")}/v1/chat/completions`
-    : "https://api.openai.com/v1/chat/completions";
+const resolveApiUrl = () => {
+  if (!ENV.openaiApiUrl || ENV.openaiApiUrl.trim().length === 0) {
+    return "https://api.openai.com/v1/chat/completions";
+  }
+
+  const normalized = ENV.openaiApiUrl.trim().replace(/\/+$/, "");
+  if (normalized.endsWith("/chat/completions")) {
+    return normalized;
+  }
+  if (normalized.endsWith("/v1")) {
+    return `${normalized}/chat/completions`;
+  }
+  return `${normalized}/v1/chat/completions`;
+};
 
 const assertApiKey = () => {
   if (!ENV.openaiApiKey) {

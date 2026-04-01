@@ -39,9 +39,7 @@ async function callOpenAI(req: ProviderRequest): Promise<ProviderResponse> {
   const apiKey = ENV.openaiApiKey;
   if (!apiKey) throw new Error("OPENAI_API_KEY not configured");
 
-  const baseUrl = ENV.openaiApiUrl
-    ? `${ENV.openaiApiUrl.replace(/\/$/, "")}/v1/chat/completions`
-    : "https://api.openai.com/v1/chat/completions";
+  const baseUrl = resolveOpenAIChatCompletionsUrl(ENV.openaiApiUrl);
 
   const model = "gpt-4o-mini";
   const payload: Record<string, unknown> = {
@@ -73,12 +71,32 @@ async function callOpenAI(req: ProviderRequest): Promise<ProviderResponse> {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`OpenAI ${res.status}: ${text}`);
+    throw new Error(
+      `OpenAI ${res.status}: ${text} (url=${baseUrl}). Check OPENAI_API_URL format and OPENAI_API_KEY/OPENAPI_API_KEY.`
+    );
   }
 
   const data = await res.json() as { choices: Array<{ message: { content: string } }> };
   const content = data.choices?.[0]?.message?.content ?? "";
   return { content, provider: "openai", model };
+}
+
+function resolveOpenAIChatCompletionsUrl(rawUrl?: string): string {
+  if (!rawUrl || rawUrl.trim().length === 0) {
+    return "https://api.openai.com/v1/chat/completions";
+  }
+
+  const normalized = rawUrl.trim().replace(/\/+$/, "");
+
+  if (normalized.endsWith("/chat/completions")) {
+    return normalized;
+  }
+
+  if (normalized.endsWith("/v1")) {
+    return `${normalized}/chat/completions`;
+  }
+
+  return `${normalized}/v1/chat/completions`;
 }
 
 // ─── Claude ───────────────────────────────────────────────────────────────────
