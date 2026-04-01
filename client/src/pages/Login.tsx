@@ -1,11 +1,9 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
 import { GraduationCap, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export default function Login() {
-  const [, navigate] = useLocation();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -23,7 +21,13 @@ export default function Login() {
       });
 
       if (!res.ok) {
-        setError("Incorrect password");
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (res.status === 401 || data?.error === "Invalid password") {
+          setError("Incorrect password");
+          return;
+        }
+
+        setError(data?.error ?? "Problem logging in. Please try again.");
         return;
       }
 

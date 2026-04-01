@@ -4,11 +4,20 @@ import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
 import { ENV } from "./env";
 import { sdk } from "./sdk";
-import { nanoid } from "nanoid";
 
 export function registerAuthRoutes(app: Express) {
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     const { password } = req.body ?? {};
+
+    if (!ENV.authPassword) {
+      res.status(500).json({ error: "Server configuration error: missing AUTH_PASSWORD" });
+      return;
+    }
+
+    if (!ENV.cookieSecret) {
+      res.status(500).json({ error: "Server configuration error: missing JWT_SECRET" });
+      return;
+    }
 
     if (!password || password !== ENV.authPassword) {
       res.status(401).json({ error: "Invalid password" });
@@ -16,6 +25,11 @@ export function registerAuthRoutes(app: Express) {
     }
 
     try {
+      if (!ENV.databaseUrl) {
+        res.status(500).json({ error: "Server configuration error: missing DATABASE_URL" });
+        return;
+      }
+
       // Ensure an admin user exists
       let user = await db.getUserByOpenId("admin");
       if (!user) {
@@ -30,7 +44,7 @@ export function registerAuthRoutes(app: Express) {
       }
 
       if (!user) {
-        res.status(500).json({ error: "Failed to create user" });
+        res.status(500).json({ error: "Failed to create user in database" });
         return;
       }
 
@@ -45,7 +59,7 @@ export function registerAuthRoutes(app: Express) {
       res.json({ ok: true });
     } catch (error) {
       console.error("[Auth] Login failed", error);
-      res.status(500).json({ error: "Login failed" });
+      res.status(500).json({ error: "Login failed due to a server error" });
     }
   });
 }
