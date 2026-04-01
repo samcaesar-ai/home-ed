@@ -1,4 +1,5 @@
 import {
+  boolean,
   integer,
   json,
   pgEnum,
@@ -14,6 +15,8 @@ export const roleEnum = pgEnum("role", ["user", "admin"]);
 export const activeEnum = pgEnum("active", ["yes", "no"]);
 export const subjectEnum = pgEnum("subject", ["maths", "english"]);
 export const statusEnum = pgEnum("status", ["pending", "generated", "reviewed"]);
+export const providerEnum = pgEnum("provider", ["openai", "claude", "gemini", "emergency"]);
+export const generationStatusEnum = pgEnum("generation_status", ["success", "fallback", "emergency", "failed"]);
 
 // ─── Core auth table ──────────────────────────────────────────────────────────
 export const users = pgTable("users", {
@@ -81,6 +84,13 @@ export const dailyTasks = pgTable("daily_tasks", {
   generatedAt: timestamp("generatedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  // ─── Provider metadata ────────────────────────────────────────────────────
+  providerAttempted: json("providerAttempted").$type<string[]>().default([]),
+  providerUsed: providerEnum("providerUsed"),
+  fallbackUsed: boolean("fallbackUsed").default(false),
+  generationStatus: generationStatusEnum("generationStatus"),
+  validationPassed: boolean("validationPassed").default(false),
+  validationErrors: json("validationErrors").$type<string[]>().default([]),
 });
 
 export type DailyTask = typeof dailyTasks.$inferSelect;

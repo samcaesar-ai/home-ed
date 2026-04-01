@@ -1,16 +1,17 @@
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
-import { useState } from "react";
 import {
   ArrowLeft, Settings, Eye, Zap, CheckCircle2, Clock, AlertCircle,
-  Calculator, BookOpen, RefreshCw, GraduationCap, LogIn
+  Calculator, BookOpen, RefreshCw, GraduationCap, LogIn, Shield,
+  AlertTriangle, ChevronDown, ChevronUp
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
-import type { MathsContent, EnglishContent } from "../../../drizzle/schema";
+import type { MathsContent, EnglishContent, DailyTask } from "../../../drizzle/schema";
+import { useState } from "react";
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
@@ -27,28 +28,108 @@ function StatusBadge({ status }: { status: string | undefined }) {
   return <Badge variant="outline"><Clock className="w-3 h-3 mr-1" />Pending</Badge>;
 }
 
+function ProviderBadge({ task }: { task: DailyTask | null | undefined }) {
+  if (!task) return null;
+  const provider = (task as any).providerUsed as string | null;
+  const fallback = (task as any).fallbackUsed as boolean | null;
+  const genStatus = (task as any).generationStatus as string | null;
+  const validationPassed = (task as any).validationPassed as boolean | null;
+  const validationErrors = (task as any).validationErrors as string[] | null;
+  const providerAttempted = (task as any).providerAttempted as string[] | null;
+  const modelLabel = (task as any).generationModel as string | null;
+
+  if (!provider && !genStatus) return null;
+
+  const isEmergency = genStatus === "emergency" || provider === "emergency";
+  const isFallback = fallback === true && !isEmergency;
+  const validationFailed = validationPassed === false && validationErrors && validationErrors.length > 0;
+
+  const providerLabel = provider === "openai" ? "OpenAI" :
+    provider === "claude" ? "Claude" :
+    provider === "gemini" ? "Gemini" :
+    provider === "emergency" ? "Template" : provider ?? "Unknown";
+
+  return (
+    <div className="mt-2 space-y-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {isEmergency ? (
+          <Badge className="bg-orange-50 text-orange-700 border-orange-200 text-xs">
+            <AlertTriangle className="w-3 h-3 mr-1" />
+            Emergency Template
+          </Badge>
+        ) : isFallback ? (
+          <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
+            <Shield className="w-3 h-3 mr-1" />
+            Fallback: {providerLabel}
+          </Badge>
+        ) : (
+          <Badge className="bg-slate-50 text-slate-600 border-slate-200 text-xs">
+            <CheckCircle2 className="w-3 h-3 mr-1" />
+            {providerLabel}
+          </Badge>
+        )}
+        {validationFailed && (
+          <Badge className="bg-red-50 text-red-600 border-red-200 text-xs">
+            <AlertCircle className="w-3 h-3 mr-1" />
+            Validation warnings
+          </Badge>
+        )}
+        {validationPassed === true && !validationFailed && (
+          <Badge className="bg-green-50 text-green-600 border-green-200 text-xs">
+            <CheckCircle2 className="w-3 h-3 mr-1" />
+            Validated
+          </Badge>
+        )}
+      </div>
+      {providerAttempted && providerAttempted.length > 1 && (
+        <p className="text-xs text-slate-400">
+          Tried: {providerAttempted.join(" \u2192 ")}
+        </p>
+      )}
+      {validationFailed && validationErrors && validationErrors.length > 0 && (
+        <div className="text-xs text-red-500 space-y-0.5">
+          {validationErrors.slice(0, 3).map((e, i) => (
+            <p key={i}>&bull; {e}</p>
+          ))}
+        </div>
+      )}
+      {modelLabel && modelLabel !== "emergency-template" && (
+        <p className="text-xs text-slate-300">{modelLabel}</p>
+      )}
+    </div>
+  );
+}
+
 function StudentCard({ student }: { student: { id: number; name: string; yearGroup: number; age: number } }) {
   const [, navigate] = useLocation();
   const today = todayString();
   const colourClass = student.name.toLowerCase() === "samson" ? "student-samson" : "student-apollo";
+  const [showDetails, setShowDetails] = useState(false);
 
-  const { data: mathsTask } = trpc.tasks.getForDate.useQuery({ studentId: student.id, date: today, subject: "maths" });
-  const { data: englishTask } = trpc.tasks.getForDate.useQuery({ studentId: student.id, date: today, subject: "english" });
+  const { data: mathsTask, refetch: refetchMaths } = trpc.tasks.getForDate.useQuery({ studentId: student.id, date: today, subject: "maths" });
+  const { data: englishTask, refetch: refetchEnglish } = trpc.tasks.getForDate.useQuery({ studentId: student.id, date: today, subject: "english" });
 
   const generateMutation = trpc.tasks.generate.useMutation({
-    onSuccess: () => toast.success(`Generated successfully`),
+    onSuccess: (_, vars) => {
+      toast.success("Generated successfully");
+      if (vars.subject === "maths") refetchMaths();
+      else refetchEnglish();
+    },
     onError: (e) => toast.error(`Generation failed: ${e.message}`),
   });
 
-  const utils = trpc.useUtils();
-
   async function handleGenerate(subject: "maths" | "english") {
     await generateMutation.mutateAsync({ studentId: student.id, subject, date: today });
-    utils.tasks.getForDate.invalidate({ studentId: student.id, date: today, subject });
   }
 
   const mathsQCount = mathsTask ? (mathsTask.content as MathsContent).questions?.length ?? 0 : 0;
   const englishTitle = englishTask ? (englishTask.content as EnglishContent).title ?? "" : "";
+
+  const mathsEmergency = (mathsTask as any)?.generationStatus === "emergency" || (mathsTask as any)?.providerUsed === "emergency";
+  const englishEmergency = (englishTask as any)?.generationStatus === "emergency" || (englishTask as any)?.providerUsed === "emergency";
+  const anyEmergency = mathsEmergency || englishEmergency;
+  const mathsFallback = (mathsTask as any)?.fallbackUsed === true && !mathsEmergency;
+  const englishFallback = (englishTask as any)?.fallbackUsed === true && !englishEmergency;
 
   return (
     <div className={`${colourClass} bg-white rounded-2xl border-2 border-[var(--student-border)] shadow-sm overflow-hidden`}>
@@ -63,18 +144,28 @@ function StudentCard({ student }: { student: { id: number; name: string; yearGro
               {student.name[0]}
             </div>
             <div>
-              <p className="text-lg font-black text-slate-800" style={{ fontFamily: "Nunito, sans-serif" }}>{student.name}</p>
-              <p className="text-xs text-slate-500">Year {student.yearGroup} · Age {student.age}</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-lg font-black text-slate-800" style={{ fontFamily: "Nunito, sans-serif" }}>{student.name}</p>
+                {anyEmergency && (
+                  <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">
+                    <AlertTriangle className="w-3 h-3 mr-1" />Emergency
+                  </Badge>
+                )}
+                {!anyEmergency && (mathsFallback || englishFallback) && (
+                  <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-xs">
+                    <Shield className="w-3 h-3 mr-1" />Fallback used
+                  </Badge>
+                )}
+              </div>
+              <p className="text-xs text-slate-500">Year {student.yearGroup} &middot; Age {student.age}</p>
             </div>
           </div>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={() => navigate(`/parent/settings/${student.id}`)}>
-              <Settings className="w-3.5 h-3.5 mr-1" />
-              Settings
+              <Settings className="w-3.5 h-3.5 mr-1" />Settings
             </Button>
             <Button size="sm" variant="outline" onClick={() => navigate(`/parent/review/${student.id}`)}>
-              <Eye className="w-3.5 h-3.5 mr-1" />
-              Review
+              <Eye className="w-3.5 h-3.5 mr-1" />Review
             </Button>
           </div>
         </div>
@@ -83,54 +174,73 @@ function StudentCard({ student }: { student: { id: number; name: string; yearGro
       {/* Task status rows */}
       <div className="p-5 space-y-4">
         {/* Maths row */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0">
-              <Calculator className="w-4 h-4 text-amber-600" />
+        <div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${mathsEmergency ? "bg-orange-50" : "bg-amber-50"}`}>
+                <Calculator className={`w-4 h-4 ${mathsEmergency ? "text-orange-500" : "text-amber-600"}`} />
+              </div>
+              <div className="min-w-0">
+                <p className="font-semibold text-slate-700 text-sm">Maths</p>
+                {mathsTask && <p className="text-xs text-slate-400 truncate">{mathsQCount} questions &middot; {(mathsTask.content as MathsContent).topic}</p>}
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="font-semibold text-slate-700 text-sm">Maths</p>
-              {mathsTask && <p className="text-xs text-slate-400 truncate">{mathsQCount} questions · {(mathsTask.content as MathsContent).topic}</p>}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <StatusBadge status={mathsTask?.status} />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleGenerate("maths")}
+                disabled={generateMutation.isPending}
+                className="h-7 px-2"
+                title="Regenerate maths worksheet"
+              >
+                {generateMutation.isPending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+              </Button>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <StatusBadge status={mathsTask?.status} />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => handleGenerate("maths")}
-              disabled={generateMutation.isPending}
-              className="h-7 px-2"
-            >
-              {generateMutation.isPending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
-            </Button>
-          </div>
+          {showDetails && <ProviderBadge task={mathsTask as DailyTask} />}
         </div>
 
         {/* English row */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center flex-shrink-0">
-              <BookOpen className="w-4 h-4 text-emerald-600" />
+        <div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${englishEmergency ? "bg-orange-50" : "bg-emerald-50"}`}>
+                <BookOpen className={`w-4 h-4 ${englishEmergency ? "text-orange-500" : "text-emerald-600"}`} />
+              </div>
+              <div className="min-w-0">
+                <p className="font-semibold text-slate-700 text-sm">English</p>
+                {englishTask && <p className="text-xs text-slate-400 truncate">{englishTitle}</p>}
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="font-semibold text-slate-700 text-sm">English</p>
-              {englishTask && <p className="text-xs text-slate-400 truncate">{englishTitle}</p>}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <StatusBadge status={englishTask?.status} />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleGenerate("english")}
+                disabled={generateMutation.isPending}
+                className="h-7 px-2"
+                title="Regenerate english worksheet"
+              >
+                {generateMutation.isPending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+              </Button>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <StatusBadge status={englishTask?.status} />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => handleGenerate("english")}
-              disabled={generateMutation.isPending}
-              className="h-7 px-2"
-            >
-              {generateMutation.isPending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
-            </Button>
-          </div>
+          {showDetails && <ProviderBadge task={englishTask as DailyTask} />}
         </div>
+
+        {/* Toggle details */}
+        {(mathsTask || englishTask) && (
+          <button
+            onClick={() => setShowDetails(!showDetails)}
+            className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 transition-colors mt-1"
+          >
+            {showDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            {showDetails ? "Hide generation details" : "Show generation details"}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -145,7 +255,12 @@ export default function ParentDashboard() {
   const generateAllMutation = trpc.tasks.generateAll.useMutation({
     onSuccess: (data) => {
       const successes = data.results.filter((r) => r.success).length;
-      toast.success(`Generated ${successes}/${data.results.length} worksheets for ${formatDate(data.taskDate)}`);
+      const fallbacks = data.results.filter((r) => r.success && (r as any).meta?.fallbackUsed).length;
+      const emergencies = data.results.filter((r) => r.success && (r as any).meta?.generationStatus === "emergency").length;
+      let msg = `Generated ${successes}/${data.results.length} worksheets for ${formatDate(data.taskDate)}`;
+      if (emergencies > 0) msg += ` \u00b7 ${emergencies} used emergency templates`;
+      else if (fallbacks > 0) msg += ` \u00b7 ${fallbacks} used fallback providers`;
+      toast.success(msg);
     },
     onError: (e) => toast.error(`Generation failed: ${e.message}`),
   });
@@ -175,7 +290,7 @@ export default function ParentDashboard() {
             onClick={() => navigate("/")}
             className="mt-4 text-sm text-slate-400 hover:text-slate-600 transition-colors"
           >
-            ← Back to student view
+            &larr; Back to student view
           </button>
         </div>
       </div>
@@ -218,7 +333,7 @@ export default function ParentDashboard() {
 
       <main className="container max-w-4xl mx-auto px-4 py-8">
         {/* Info banner */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-8 flex items-start gap-3">
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 flex items-start gap-3">
           <Clock className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-semibold text-blue-800">Automatic daily generation</p>
@@ -226,6 +341,23 @@ export default function ParentDashboard() {
               Worksheets are automatically generated at 3:00 AM every morning using each student's saved settings.
               Use the buttons below to regenerate or review individual worksheets.
             </p>
+          </div>
+        </div>
+
+        {/* Provider legend */}
+        <div className="bg-white border border-slate-200 rounded-xl p-4 mb-8">
+          <p className="text-xs font-semibold text-slate-600 mb-2 flex items-center gap-1.5">
+            <Shield className="w-3.5 h-3.5" />
+            Provider fallback order
+          </p>
+          <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-slate-400 inline-block" />OpenAI (primary)</span>
+            <span className="text-slate-300">&rarr;</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Claude (secondary)</span>
+            <span className="text-slate-300">&rarr;</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-400 inline-block" />Gemini (tertiary)</span>
+            <span className="text-slate-300">&rarr;</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Emergency template</span>
           </div>
         </div>
 

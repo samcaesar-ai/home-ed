@@ -24,6 +24,7 @@ import {
   generateMathsTask,
   regenerateEnglishPrompt,
   regenerateSingleQuestion,
+  type GenerationMeta,
 } from "./aiGeneration";
 import type { EnglishContent, MathsContent } from "../drizzle/schema";
 
@@ -39,6 +40,69 @@ async function buildHistoryContext(studentId: number, subject: "maths" | "englis
   return history
     .map((h) => `${h.taskDate}: ${h.summary}`)
     .join("\n");
+}
+
+// ─── Helper: run generation and save to DB with full metadata ─────────────────
+async function generateAndSave(params: {
+  studentId: number;
+  studentName: string;
+  yearGroup: number;
+  age: number;
+  subject: "maths" | "english";
+  taskDate: string;
+  settings: { mathsFocusAreas: unknown; englishWritingStyles: unknown; questionCount: number; additionalNotes?: string | null };
+  historyContext: string;
+}): Promise<{ content: MathsContent | EnglishContent; meta: GenerationMeta; summary: string }> {
+  const { subject, studentName, yearGroup, age, settings, historyContext } = params;
+
+  if (subject === "maths") {
+    const result = await generateMathsTask({
+      studentName,
+      yearGroup,
+      age,
+      focusAreas: settings.mathsFocusAreas as string[],
+      questionCount: settings.questionCount,
+      additionalNotes: settings.additionalNotes,
+      recentHistory: historyContext,
+    });
+    const mc = result.content;
+    const summary = `Topic: ${mc.topic ?? "Mixed"} — ${mc.questions.length} questions`;
+    await upsertDailyTask({
+      studentId: params.studentId,
+      taskDate: params.taskDate,
+      subject,
+      content: mc,
+      status: "generated",
+      generationModel: result.meta.modelUsed,
+      generatedAt: new Date(),
+      ...(result.meta as any),
+    } as any);
+    await addTaskHistory(params.studentId, subject, params.taskDate, summary);
+    return { content: mc, meta: result.meta, summary };
+  } else {
+    const result = await generateEnglishTask({
+      studentName,
+      yearGroup,
+      age,
+      writingStyles: settings.englishWritingStyles as string[],
+      additionalNotes: settings.additionalNotes,
+      recentHistory: historyContext,
+    });
+    const ec = result.content;
+    const summary = `${ec.promptType}: "${ec.title}"`;
+    await upsertDailyTask({
+      studentId: params.studentId,
+      taskDate: params.taskDate,
+      subject,
+      content: ec,
+      status: "generated",
+      generationModel: result.meta.modelUsed,
+      generatedAt: new Date(),
+      ...(result.meta as any),
+    } as any);
+    await addTaskHistory(params.studentId, subject, params.taskDate, summary);
+    return { content: ec, meta: result.meta, summary };
+  }
 }
 
 // ─── Admin guard middleware ───────────────────────────────────────────────────
@@ -174,50 +238,18 @@ const tasksRouter = router({
       if (!student) throw new TRPCError({ code: "NOT_FOUND", message: "Student not found." });
       const settings = await getSettingsByStudentId(input.studentId);
       if (!settings) throw new TRPCError({ code: "NOT_FOUND", message: "Student settings not found." });
-
       const historyContext = await buildHistoryContext(input.studentId, input.subject);
-
-      let content: MathsContent | EnglishContent;
-      let summary: string;
-
-      if (input.subject === "maths") {
-        content = await generateMathsTask({
-          studentName: student.name,
-          yearGroup: student.yearGroup,
-          age: student.age,
-          focusAreas: settings.mathsFocusAreas as string[],
-          questionCount: settings.questionCount,
-          additionalNotes: settings.additionalNotes,
-          recentHistory: historyContext,
-        });
-        const mc = content as MathsContent;
-        summary = `Topic: ${mc.topic ?? "Mixed"} — ${mc.questions.length} questions`;
-      } else {
-        content = await generateEnglishTask({
-          studentName: student.name,
-          yearGroup: student.yearGroup,
-          age: student.age,
-          writingStyles: settings.englishWritingStyles as string[],
-          additionalNotes: settings.additionalNotes,
-          recentHistory: historyContext,
-        });
-        const ec = content as EnglishContent;
-        summary = `${ec.promptType}: "${ec.title}"`;
-      }
-
-      await upsertDailyTask({
+      const { meta } = await generateAndSave({
         studentId: input.studentId,
-        taskDate,
+        studentName: student.name,
+        yearGroup: student.yearGroup,
+        age: student.age,
         subject: input.subject,
-        content,
-        status: "generated",
-        generationModel: "built-in-llm",
-        generatedAt: new Date(),
+        taskDate,
+        settings,
+        historyContext,
       });
-
-      await addTaskHistory(input.studentId, input.subject, taskDate, summary);
-
-      return { success: true, taskDate };
+      return { success: true, taskDate, meta };
     }),
 
   generateAll: adminProcedure
@@ -229,54 +261,25 @@ const tasksRouter = router({
     .mutation(async ({ input }) => {
       const taskDate = input.date ?? todayString();
       const allStudents = await getAllStudents();
-      const results: { studentId: number; subject: string; success: boolean; error?: string }[] = [];
+      const results: { studentId: number; subject: string; success: boolean; meta?: GenerationMeta; error?: string }[] = [];
 
       for (const student of allStudents) {
         for (const subject of ["maths", "english"] as const) {
           try {
             const settings = await getSettingsByStudentId(student.id);
             if (!settings) { results.push({ studentId: student.id, subject, success: false, error: "No settings" }); continue; }
-
             const historyContext = await buildHistoryContext(student.id, subject);
-            let content: MathsContent | EnglishContent;
-            let summary: string;
-
-            if (subject === "maths") {
-              content = await generateMathsTask({
-                studentName: student.name,
-                yearGroup: student.yearGroup,
-                age: student.age,
-                focusAreas: settings.mathsFocusAreas as string[],
-                questionCount: settings.questionCount,
-                additionalNotes: settings.additionalNotes,
-                recentHistory: historyContext,
-              });
-              const mc = content as MathsContent;
-              summary = `Topic: ${mc.topic ?? "Mixed"} — ${mc.questions.length} questions`;
-            } else {
-              content = await generateEnglishTask({
-                studentName: student.name,
-                yearGroup: student.yearGroup,
-                age: student.age,
-                writingStyles: settings.englishWritingStyles as string[],
-                additionalNotes: settings.additionalNotes,
-                recentHistory: historyContext,
-              });
-              const ec = content as EnglishContent;
-              summary = `${ec.promptType}: "${ec.title}"`;
-            }
-
-            await upsertDailyTask({
+            const { meta } = await generateAndSave({
               studentId: student.id,
-              taskDate,
+              studentName: student.name,
+              yearGroup: student.yearGroup,
+              age: student.age,
               subject,
-              content,
-              status: "generated",
-              generationModel: "built-in-llm",
-              generatedAt: new Date(),
+              taskDate,
+              settings,
+              historyContext,
             });
-            await addTaskHistory(student.id, subject, taskDate, summary);
-            results.push({ studentId: student.id, subject, success: true });
+            results.push({ studentId: student.id, subject, success: true, meta });
           } catch (err) {
             results.push({ studentId: student.id, subject, success: false, error: String(err) });
           }
@@ -389,50 +392,25 @@ const cronRouter = router({
       }
       const taskDate = todayString();
       const allStudents = await getAllStudents();
-      const results = [];
+      const results: { studentId: number; subject: string; success: boolean; meta?: GenerationMeta; error?: string }[] = [];
+
       for (const student of allStudents) {
         for (const subject of ["maths", "english"] as const) {
           try {
             const settings = await getSettingsByStudentId(student.id);
-            if (!settings) continue;
+            if (!settings) { results.push({ studentId: student.id, subject, success: false, error: "No settings" }); continue; }
             const historyContext = await buildHistoryContext(student.id, subject);
-            let content: MathsContent | EnglishContent;
-            let summary: string;
-            if (subject === "maths") {
-              content = await generateMathsTask({
-                studentName: student.name,
-                yearGroup: student.yearGroup,
-                age: student.age,
-                focusAreas: settings.mathsFocusAreas as string[],
-                questionCount: settings.questionCount,
-                additionalNotes: settings.additionalNotes,
-                recentHistory: historyContext,
-              });
-              const mc = content as MathsContent;
-              summary = `Topic: ${mc.topic ?? "Mixed"} — ${mc.questions.length} questions`;
-            } else {
-              content = await generateEnglishTask({
-                studentName: student.name,
-                yearGroup: student.yearGroup,
-                age: student.age,
-                writingStyles: settings.englishWritingStyles as string[],
-                additionalNotes: settings.additionalNotes,
-                recentHistory: historyContext,
-              });
-              const ec = content as EnglishContent;
-              summary = `${ec.promptType}: "${ec.title}"`;
-            }
-            await upsertDailyTask({
+            const { meta } = await generateAndSave({
               studentId: student.id,
-              taskDate,
+              studentName: student.name,
+              yearGroup: student.yearGroup,
+              age: student.age,
               subject,
-              content,
-              status: "generated",
-              generationModel: "built-in-llm",
-              generatedAt: new Date(),
+              taskDate,
+              settings,
+              historyContext,
             });
-            await addTaskHistory(student.id, subject, taskDate, summary);
-            results.push({ studentId: student.id, subject, success: true });
+            results.push({ studentId: student.id, subject, success: true, meta });
           } catch (err) {
             results.push({ studentId: student.id, subject, success: false, error: String(err) });
           }

@@ -175,6 +175,12 @@ export async function upsertDailyTask(data: InsertDailyTask & { taskDate: string
         status: data.status ?? "generated",
         generationModel: data.generationModel,
         generatedAt: data.generatedAt ?? new Date(),
+        providerAttempted: (data as any).providerAttempted ?? [],
+        providerUsed: (data as any).providerUsed ?? null,
+        fallbackUsed: (data as any).fallbackUsed ?? false,
+        generationStatus: (data as any).generationStatus ?? null,
+        validationPassed: (data as any).validationPassed ?? false,
+        validationErrors: (data as any).validationErrors ?? [],
       })
       .where(eq(dailyTasks.id, existing.id));
   } else {
