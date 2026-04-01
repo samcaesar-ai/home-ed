@@ -10,11 +10,64 @@ import type { EnglishContent, MathsContent } from "../drizzle/schema";
 import { generateEnglishPDF, generateMathsPDF } from "../server/pdfGenerator";
 import { createContext } from "../server/_core/context";
 import { registerAuthRoutes } from "../server/_core/oauth";
+import { ENV } from "../server/_core/env";
 
 function registerAppRoutes(app: ReturnType<typeof express>) {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerAuthRoutes(app);
+
+  // Debug endpoint: test all LLM providers and return raw errors
+  app.get("/api/debug/providers", async (req, res) => {
+    const results: Record<string, { ok: boolean; error?: string; response?: string }> = {};
+    const testPayload = JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: "Reply with the single word: hello" }],
+      max_tokens: 10,
+    });
+
+    // Test OpenAI
+    try {
+      const baseUrl = ENV.openaiApiUrl
+        ? `${ENV.openaiApiUrl.replace(/\/$/, "")}/v1/chat/completions`
+        : "https://api.openai.com/v1/chat/completions";
+      const r = await fetch(baseUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${ENV.openaiApiKey}` },
+        body: testPayload,
+        signal: AbortSignal.timeout(15_000),
+      });
+      const text = await r.text();
+      results.openai = r.ok ? { ok: true, response: text.slice(0, 200) } : { ok: false, error: `HTTP ${r.status}: ${text.slice(0, 300)}` };
+    } catch (e) { results.openai = { ok: false, error: String(e) }; }
+
+    // Test Claude
+    try {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({ model: "claude-3-5-haiku-20241022", max_tokens: 10, messages: [{ role: "user", content: "Reply with the single word: hello" }] }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const text = await r.text();
+      results.claude = r.ok ? { ok: true, response: text.slice(0, 200) } : { ok: false, error: `HTTP ${r.status}: ${text.slice(0, 300)}` };
+    } catch (e) { results.claude = { ok: false, error: String(e) }; }
+
+    // Test Gemini
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY ?? ""}`;
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "Reply with the single word: hello" }] }] }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const text = await r.text();
+      results.gemini = r.ok ? { ok: true, response: text.slice(0, 200) } : { ok: false, error: `HTTP ${r.status}: ${text.slice(0, 300)}` };
+    } catch (e) { results.gemini = { ok: false, error: String(e) }; }
+
+    res.json({ envKeys: { openai: !!ENV.openaiApiKey, claude: !!process.env.ANTHROPIC_API_KEY, gemini: !!process.env.GEMINI_API_KEY, openaiUrl: ENV.openaiApiUrl || "(default)" }, results });
+  });
 
   app.get("/api/pdf/:studentId/:subject/:date", async (req, res) => {
     try {
