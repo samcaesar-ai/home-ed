@@ -87,6 +87,8 @@ function registerAppRoutes(app: Express) {
 
 export async function createApp(options?: { includeFrontend?: boolean; server?: HttpServer }) {
   const app = express();
+  // Required so req.protocol honors X-Forwarded-Proto on platforms like Vercel.
+  app.set("trust proxy", true);
   registerAppRoutes(app);
 
   if (options?.includeFrontend !== false) {
