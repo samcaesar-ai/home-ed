@@ -1562,7 +1562,37 @@ var tasksRouter = router({
   })
 });
 var cronRouter = router({
-  triggerDaily: publicProcedure.input(z2.object({ secret: z2.string() })).mutation(async ({ input }) => {
+  // Generate a single worksheet for one student+subject (fits within serverless timeout)
+  generateOne: publicProcedure.input(z2.object({
+    secret: z2.string(),
+    studentId: z2.number(),
+    subject: z2.enum(["maths", "english"]),
+    taskDate: z2.string().optional()
+  })).mutation(async ({ input }) => {
+    const expectedSecret = process.env.CRON_SECRET ?? "daily-tasks-cron";
+    if (input.secret !== expectedSecret) {
+      throw new TRPCError3({ code: "UNAUTHORIZED", message: "Invalid cron secret." });
+    }
+    const taskDate = input.taskDate ?? todayString();
+    const student = await getStudentById(input.studentId);
+    if (!student) throw new TRPCError3({ code: "NOT_FOUND", message: "Student not found" });
+    const settings = await getSettingsByStudentId(student.id);
+    if (!settings) throw new TRPCError3({ code: "NOT_FOUND", message: "Settings not found" });
+    const historyContext = await buildHistoryContext(student.id, input.subject);
+    const { meta } = await generateAndSave({
+      studentId: student.id,
+      studentName: student.name,
+      yearGroup: student.yearGroup,
+      age: student.age,
+      subject: input.subject,
+      taskDate,
+      settings,
+      historyContext
+    });
+    return { success: true, studentId: student.id, subject: input.subject, taskDate, meta };
+  }),
+  // Trigger daily generation for all students — calls generateOne per worksheet via HTTP
+  triggerDaily: publicProcedure.input(z2.object({ secret: z2.string() })).mutation(async ({ input, ctx }) => {
     const expectedSecret = process.env.CRON_SECRET ?? "daily-tasks-cron";
     if (input.secret !== expectedSecret) {
       throw new TRPCError3({ code: "UNAUTHORIZED", message: "Invalid cron secret." });
@@ -1570,31 +1600,33 @@ var cronRouter = router({
     const taskDate = todayString();
     const allStudents = await getAllStudents();
     const results = [];
+    const host = ctx.req.headers.host ?? "tasks.homeis.fun";
+    const protocol = host.includes("localhost") ? "http" : "https";
+    const baseUrl = `${protocol}://${host}`;
+    const tasks = [];
     for (const student of allStudents) {
       for (const subject of ["maths", "english"]) {
-        try {
-          const settings = await getSettingsByStudentId(student.id);
-          if (!settings) {
-            results.push({ studentId: student.id, subject, success: false, error: "No settings" });
-            continue;
+        tasks.push((async () => {
+          try {
+            const resp = await fetch(`${baseUrl}/api/trpc/cron.generateOne`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ json: { secret: input.secret, studentId: student.id, subject, taskDate } }),
+              signal: AbortSignal.timeout(55e3)
+            });
+            const data = await resp.json();
+            if (resp.ok && data.result?.data?.json) {
+              results.push({ studentId: student.id, subject, success: true, meta: data.result.data.json.meta });
+            } else {
+              results.push({ studentId: student.id, subject, success: false, error: data.error?.json?.message ?? `HTTP ${resp.status}` });
+            }
+          } catch (err) {
+            results.push({ studentId: student.id, subject, success: false, error: String(err) });
           }
-          const historyContext = await buildHistoryContext(student.id, subject);
-          const { meta } = await generateAndSave({
-            studentId: student.id,
-            studentName: student.name,
-            yearGroup: student.yearGroup,
-            age: student.age,
-            subject,
-            taskDate,
-            settings,
-            historyContext
-          });
-          results.push({ studentId: student.id, subject, success: true, meta });
-        } catch (err) {
-          results.push({ studentId: student.id, subject, success: false, error: String(err) });
-        }
+        })());
       }
     }
+    await Promise.all(tasks);
     return { success: true, taskDate, results };
   })
 });
