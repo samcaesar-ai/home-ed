@@ -9,7 +9,6 @@ import type { EnglishContent, MathsContent } from "../../drizzle/schema";
 import { generateEnglishPDF, generateMathsPDF } from "../pdfGenerator";
 import { createContext } from "./context";
 import { registerAuthRoutes } from "./oauth";
-import { serveStatic, setupVite } from "./vite";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -94,8 +93,10 @@ export async function createApp(options?: { includeFrontend?: boolean; server?: 
       if (!options?.server) {
         throw new Error("Development mode requires an HTTP server instance");
       }
+      const { setupVite } = await import("./vite.js");
       await setupVite(app, options.server);
     } else {
+      const { serveStatic } = await import("./vite.js");
       serveStatic(app);
     }
   }
