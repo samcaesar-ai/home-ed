@@ -23,7 +23,12 @@ export default function Login() {
       });
 
       if (!res.ok) {
-        setError("Incorrect password");
+        const data = await res.json().catch(() => null);
+        setError(
+          res.status === 401
+            ? "Incorrect password"
+            : data?.error ?? "Something went wrong. Please try again."
+        );
         return;
       }
 
