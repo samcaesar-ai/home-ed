@@ -1,5 +1,7 @@
 var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __esm = (fn, res) => function __init() {
   return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
 };
@@ -7,6 +9,238 @@ var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
 };
+var __copyProps = (to, from, except, desc2) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc2 = __getOwnPropDesc(from, key)) || desc2.enumerable });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+// shared/const.ts
+var COOKIE_NAME, ONE_YEAR_MS, UNAUTHED_ERR_MSG, NOT_ADMIN_ERR_MSG;
+var init_const = __esm({
+  "shared/const.ts"() {
+    "use strict";
+    COOKIE_NAME = "app_session_id";
+    ONE_YEAR_MS = 1e3 * 60 * 60 * 24 * 365;
+    UNAUTHED_ERR_MSG = "Please login (10001)";
+    NOT_ADMIN_ERR_MSG = "You do not have required permission (10002)";
+  }
+});
+
+// server/_core/cookies.ts
+function isSecureRequest(req) {
+  if (req.protocol === "https") return true;
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  if (!forwardedProto) return false;
+  const protoList = Array.isArray(forwardedProto) ? forwardedProto : forwardedProto.split(",");
+  return protoList.some((proto) => proto.trim().toLowerCase() === "https");
+}
+function getSessionCookieOptions(req) {
+  const secure = isSecureRequest(req);
+  return {
+    httpOnly: true,
+    path: "/",
+    // Browsers reject SameSite=None cookies unless Secure=true.
+    // Fall back to Lax when requests are not HTTPS (e.g., local HTTP dev).
+    sameSite: secure ? "none" : "lax",
+    secure
+  };
+}
+var init_cookies = __esm({
+  "server/_core/cookies.ts"() {
+    "use strict";
+  }
+});
+
+// server/_core/env.ts
+var ENV;
+var init_env = __esm({
+  "server/_core/env.ts"() {
+    "use strict";
+    ENV = {
+      cookieSecret: process.env.JWT_SECRET ?? "",
+      databaseUrl: process.env.DATABASE_URL ?? "",
+      authPassword: process.env.AUTH_PASSWORD ?? "",
+      isProduction: process.env.NODE_ENV === "production",
+      openaiApiUrl: process.env.OPENAI_API_URL ?? "",
+      openaiApiKey: process.env.OPENAI_API_KEY ?? "",
+      // Aliases used by core proxy modules (dataApi, imageGeneration, map, storage, etc.)
+      get forgeApiUrl() {
+        return this.openaiApiUrl;
+      },
+      get forgeApiKey() {
+        return this.openaiApiKey;
+      }
+    };
+  }
+});
+
+// server/_core/notification.ts
+import { TRPCError } from "@trpc/server";
+async function notifyOwner(payload) {
+  const { title, content } = validatePayload(payload);
+  if (!ENV.forgeApiUrl) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Notification service URL is not configured."
+    });
+  }
+  if (!ENV.forgeApiKey) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Notification service API key is not configured."
+    });
+  }
+  const endpoint = buildEndpointUrl(ENV.forgeApiUrl);
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${ENV.forgeApiKey}`,
+        "content-type": "application/json",
+        "connect-protocol-version": "1"
+      },
+      body: JSON.stringify({ title, content })
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      console.warn(
+        `[Notification] Failed to notify owner (${response.status} ${response.statusText})${detail ? `: ${detail}` : ""}`
+      );
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn("[Notification] Error calling notification service:", error);
+    return false;
+  }
+}
+var TITLE_MAX_LENGTH, CONTENT_MAX_LENGTH, trimValue, isNonEmptyString, buildEndpointUrl, validatePayload;
+var init_notification = __esm({
+  "server/_core/notification.ts"() {
+    "use strict";
+    init_env();
+    TITLE_MAX_LENGTH = 1200;
+    CONTENT_MAX_LENGTH = 2e4;
+    trimValue = (value) => value.trim();
+    isNonEmptyString = (value) => typeof value === "string" && value.trim().length > 0;
+    buildEndpointUrl = (baseUrl) => {
+      const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+      return new URL(
+        "webdevtoken.v1.WebDevService/SendNotification",
+        normalizedBase
+      ).toString();
+    };
+    validatePayload = (input) => {
+      if (!isNonEmptyString(input.title)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Notification title is required."
+        });
+      }
+      if (!isNonEmptyString(input.content)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Notification content is required."
+        });
+      }
+      const title = trimValue(input.title);
+      const content = trimValue(input.content);
+      if (title.length > TITLE_MAX_LENGTH) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Notification title must be at most ${TITLE_MAX_LENGTH} characters.`
+        });
+      }
+      if (content.length > CONTENT_MAX_LENGTH) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Notification content must be at most ${CONTENT_MAX_LENGTH} characters.`
+        });
+      }
+      return { title, content };
+    };
+  }
+});
+
+// server/_core/trpc.ts
+import { initTRPC, TRPCError as TRPCError2 } from "@trpc/server";
+import superjson from "superjson";
+var t, router, publicProcedure, requireUser, protectedProcedure, adminProcedure;
+var init_trpc = __esm({
+  "server/_core/trpc.ts"() {
+    "use strict";
+    init_const();
+    t = initTRPC.context().create({
+      transformer: superjson
+    });
+    router = t.router;
+    publicProcedure = t.procedure;
+    requireUser = t.middleware(async (opts) => {
+      const { ctx, next } = opts;
+      if (!ctx.user) {
+        throw new TRPCError2({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+      }
+      return next({
+        ctx: {
+          ...ctx,
+          user: ctx.user
+        }
+      });
+    });
+    protectedProcedure = t.procedure.use(requireUser);
+    adminProcedure = t.procedure.use(
+      t.middleware(async (opts) => {
+        const { ctx, next } = opts;
+        if (!ctx.user || ctx.user.role !== "admin") {
+          throw new TRPCError2({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
+        }
+        return next({
+          ctx: {
+            ...ctx,
+            user: ctx.user
+          }
+        });
+      })
+    );
+  }
+});
+
+// server/_core/systemRouter.ts
+import { z } from "zod";
+var systemRouter;
+var init_systemRouter = __esm({
+  "server/_core/systemRouter.ts"() {
+    "use strict";
+    init_notification();
+    init_trpc();
+    systemRouter = router({
+      health: publicProcedure.input(
+        z.object({
+          timestamp: z.number().min(0, "timestamp cannot be negative")
+        })
+      ).query(() => ({
+        ok: true
+      })),
+      notifyOwner: adminProcedure.input(
+        z.object({
+          title: z.string().min(1, "title is required"),
+          content: z.string().min(1, "content is required")
+        })
+      ).mutation(async ({ input }) => {
+        const delivered = await notifyOwner(input);
+        return {
+          success: delivered
+        };
+      })
+    });
+  }
+});
 
 // drizzle/schema.ts
 var schema_exports = {};
@@ -304,357 +538,7 @@ var init_db = __esm({
   }
 });
 
-// api/serverless-entry.ts
-import "dotenv/config";
-import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import express from "express";
-
-// server/routers.ts
-import { TRPCError as TRPCError3 } from "@trpc/server";
-import { z as z2 } from "zod";
-
-// shared/const.ts
-var COOKIE_NAME = "app_session_id";
-var ONE_YEAR_MS = 1e3 * 60 * 60 * 24 * 365;
-var UNAUTHED_ERR_MSG = "Please login (10001)";
-var NOT_ADMIN_ERR_MSG = "You do not have required permission (10002)";
-
-// server/_core/cookies.ts
-function isSecureRequest(req) {
-  if (req.protocol === "https") return true;
-  const forwardedProto = req.headers["x-forwarded-proto"];
-  if (!forwardedProto) return false;
-  const protoList = Array.isArray(forwardedProto) ? forwardedProto : forwardedProto.split(",");
-  return protoList.some((proto) => proto.trim().toLowerCase() === "https");
-}
-function getSessionCookieOptions(req) {
-  const secure = isSecureRequest(req);
-  return {
-    httpOnly: true,
-    path: "/",
-    // Browsers reject SameSite=None cookies unless Secure=true.
-    // Fall back to Lax when requests are not HTTPS (e.g., local HTTP dev).
-    sameSite: secure ? "none" : "lax",
-    secure
-  };
-}
-
-// server/_core/systemRouter.ts
-import { z } from "zod";
-
-// server/_core/notification.ts
-import { TRPCError } from "@trpc/server";
-
-// server/_core/env.ts
-var ENV = {
-  cookieSecret: process.env.JWT_SECRET ?? "",
-  databaseUrl: process.env.DATABASE_URL ?? "",
-  authPassword: process.env.AUTH_PASSWORD ?? "",
-  isProduction: process.env.NODE_ENV === "production",
-  openaiApiUrl: process.env.OPENAI_API_URL ?? "",
-  openaiApiKey: process.env.OPENAI_API_KEY ?? "",
-  // Aliases used by core proxy modules (dataApi, imageGeneration, map, storage, etc.)
-  get forgeApiUrl() {
-    return this.openaiApiUrl;
-  },
-  get forgeApiKey() {
-    return this.openaiApiKey;
-  }
-};
-
-// server/_core/notification.ts
-var TITLE_MAX_LENGTH = 1200;
-var CONTENT_MAX_LENGTH = 2e4;
-var trimValue = (value) => value.trim();
-var isNonEmptyString = (value) => typeof value === "string" && value.trim().length > 0;
-var buildEndpointUrl = (baseUrl) => {
-  const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-  return new URL(
-    "webdevtoken.v1.WebDevService/SendNotification",
-    normalizedBase
-  ).toString();
-};
-var validatePayload = (input) => {
-  if (!isNonEmptyString(input.title)) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Notification title is required."
-    });
-  }
-  if (!isNonEmptyString(input.content)) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Notification content is required."
-    });
-  }
-  const title = trimValue(input.title);
-  const content = trimValue(input.content);
-  if (title.length > TITLE_MAX_LENGTH) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `Notification title must be at most ${TITLE_MAX_LENGTH} characters.`
-    });
-  }
-  if (content.length > CONTENT_MAX_LENGTH) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `Notification content must be at most ${CONTENT_MAX_LENGTH} characters.`
-    });
-  }
-  return { title, content };
-};
-async function notifyOwner(payload) {
-  const { title, content } = validatePayload(payload);
-  if (!ENV.forgeApiUrl) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Notification service URL is not configured."
-    });
-  }
-  if (!ENV.forgeApiKey) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Notification service API key is not configured."
-    });
-  }
-  const endpoint = buildEndpointUrl(ENV.forgeApiUrl);
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${ENV.forgeApiKey}`,
-        "content-type": "application/json",
-        "connect-protocol-version": "1"
-      },
-      body: JSON.stringify({ title, content })
-    });
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      console.warn(
-        `[Notification] Failed to notify owner (${response.status} ${response.statusText})${detail ? `: ${detail}` : ""}`
-      );
-      return false;
-    }
-    return true;
-  } catch (error) {
-    console.warn("[Notification] Error calling notification service:", error);
-    return false;
-  }
-}
-
-// server/_core/trpc.ts
-import { initTRPC, TRPCError as TRPCError2 } from "@trpc/server";
-import superjson from "superjson";
-var t = initTRPC.context().create({
-  transformer: superjson
-});
-var router = t.router;
-var publicProcedure = t.procedure;
-var requireUser = t.middleware(async (opts) => {
-  const { ctx, next } = opts;
-  if (!ctx.user) {
-    throw new TRPCError2({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
-  }
-  return next({
-    ctx: {
-      ...ctx,
-      user: ctx.user
-    }
-  });
-});
-var protectedProcedure = t.procedure.use(requireUser);
-var adminProcedure = t.procedure.use(
-  t.middleware(async (opts) => {
-    const { ctx, next } = opts;
-    if (!ctx.user || ctx.user.role !== "admin") {
-      throw new TRPCError2({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
-    }
-    return next({
-      ctx: {
-        ...ctx,
-        user: ctx.user
-      }
-    });
-  })
-);
-
-// server/_core/systemRouter.ts
-var systemRouter = router({
-  health: publicProcedure.input(
-    z.object({
-      timestamp: z.number().min(0, "timestamp cannot be negative")
-    })
-  ).query(() => ({
-    ok: true
-  })),
-  notifyOwner: adminProcedure.input(
-    z.object({
-      title: z.string().min(1, "title is required"),
-      content: z.string().min(1, "content is required")
-    })
-  ).mutation(async ({ input }) => {
-    const delivered = await notifyOwner(input);
-    return {
-      success: delivered
-    };
-  })
-});
-
-// server/routers.ts
-init_db();
-
 // server/emergencyTemplates.ts
-var MATHS_YEAR_6 = [
-  {
-    topic: "Arithmetic and Number",
-    questions: [
-      { id: 1, text: "Calculate 348 + 276", answer: "624" },
-      { id: 2, text: "Calculate 503 \u2212 187", answer: "316" },
-      { id: 3, text: "Calculate 24 \xD7 7", answer: "168" },
-      { id: 4, text: "Calculate 144 \xF7 12", answer: "12" },
-      { id: 5, text: "What is 50% of 240?", answer: "120" },
-      { id: 6, text: "Round 3,847 to the nearest hundred.", answer: "3,800" },
-      { id: 7, text: "Write the next two numbers in the sequence: 4, 8, 16, 32, __, __", answer: "64, 128" },
-      { id: 8, text: "What is 3/4 of 48?", answer: "36" },
-      { id: 9, text: "A bag of apples costs \xA31.35. How much do 4 bags cost?", answer: "\xA35.40" },
-      { id: 10, text: "Write 0.75 as a fraction in its simplest form.", answer: "3/4" },
-      { id: 11, text: "What is 25% of 160?", answer: "40" },
-      { id: 12, text: "Calculate 1,000 \u2212 364", answer: "636" },
-      { id: 13, text: "A rectangle has a length of 9 cm and a width of 5 cm. What is its area?", answer: "45 cm\xB2" },
-      { id: 14, text: "List all the factors of 24.", answer: "1, 2, 3, 4, 6, 8, 12, 24" },
-      { id: 15, text: "A train journey takes 1 hour 45 minutes. If the train departs at 09:20, when does it arrive?", answer: "11:05" }
-    ]
-  },
-  {
-    topic: "Fractions and Decimals",
-    questions: [
-      { id: 1, text: "Add: 1/4 + 1/2", answer: "3/4" },
-      { id: 2, text: "Subtract: 3/4 \u2212 1/4", answer: "1/2" },
-      { id: 3, text: "Write 2/5 as a decimal.", answer: "0.4" },
-      { id: 4, text: "Write 0.6 as a fraction in its simplest form.", answer: "3/5" },
-      { id: 5, text: "Order these decimals from smallest to largest: 0.7, 0.07, 0.71, 0.17", answer: "0.07, 0.17, 0.7, 0.71" },
-      { id: 6, text: "What is 1/3 of 90?", answer: "30" },
-      { id: 7, text: "Calculate 0.4 \xD7 5", answer: "2.0" },
-      { id: 8, text: "A pizza is cut into 8 equal slices. Sam eats 3 slices. What fraction is left?", answer: "5/8" },
-      { id: 9, text: "Write 3/10 as a percentage.", answer: "30%" },
-      { id: 10, text: "Calculate 2.5 + 1.75", answer: "4.25" },
-      { id: 11, text: "What is 10% of 350?", answer: "35" },
-      { id: 12, text: "Simplify 6/9 to its lowest terms.", answer: "2/3" },
-      { id: 13, text: "Calculate 4.8 \u2212 2.3", answer: "2.5" },
-      { id: 14, text: "Write 7/20 as a decimal.", answer: "0.35" },
-      { id: 15, text: "A jug holds 1.5 litres. How many 250 ml glasses can be filled from it?", answer: "6" }
-    ]
-  }
-];
-var MATHS_YEAR_7 = [
-  {
-    topic: "Algebra and Number",
-    questions: [
-      { id: 1, text: "Simplify: 3x + 5x", answer: "8x" },
-      { id: 2, text: "Solve: x + 7 = 15", answer: "x = 8" },
-      { id: 3, text: "Solve: 3x = 21", answer: "x = 7" },
-      { id: 4, text: "Calculate: (\u22123) + (\u22125)", answer: "\u22128" },
-      { id: 5, text: "Calculate: (\u22124) \xD7 3", answer: "\u221212" },
-      { id: 6, text: "Find the value of 2x + 3 when x = 4", answer: "11" },
-      { id: 7, text: "Write 48 as a product of its prime factors.", answer: "2\xB3 \xD7 3 (or 2 \xD7 2 \xD7 2 \xD7 3)" },
-      { id: 8, text: "Find the HCF of 12 and 18.", answer: "6" },
-      { id: 9, text: "Find the LCM of 4 and 6.", answer: "12" },
-      { id: 10, text: "Calculate 15% of 200.", answer: "30" },
-      { id: 11, text: "A shirt costs \xA340 and is reduced by 20%. What is the sale price?", answer: "\xA332" },
-      { id: 12, text: "Expand: 3(x + 4)", answer: "3x + 12" },
-      { id: 13, text: "Solve: 2x \u2212 3 = 11", answer: "x = 7" },
-      { id: 14, text: "Calculate: 2\xB3 + 3\xB2", answer: "17" },
-      { id: 15, text: "A car travels 120 km in 2 hours. What is its average speed?", answer: "60 km/h" },
-      { id: 16, text: "Simplify: 4a + 2b \u2212 a + 3b", answer: "3a + 5b" },
-      { id: 17, text: "What is the square root of 144?", answer: "12" },
-      { id: 18, text: "Convert 3/8 to a decimal.", answer: "0.375" },
-      { id: 19, text: "A rectangle has a perimeter of 36 cm and a length of 11 cm. What is its width?", answer: "7 cm" },
-      { id: 20, text: "Calculate the area of a triangle with base 10 cm and height 6 cm.", answer: "30 cm\xB2" }
-    ]
-  },
-  {
-    topic: "Geometry and Measurement",
-    questions: [
-      { id: 1, text: "What do the angles in a triangle add up to?", answer: "180\xB0" },
-      { id: 2, text: "What do the angles in a quadrilateral add up to?", answer: "360\xB0" },
-      { id: 3, text: "Find the missing angle in a triangle where the other two angles are 65\xB0 and 72\xB0.", answer: "43\xB0" },
-      { id: 4, text: "A square has a side of 8 cm. What is its perimeter?", answer: "32 cm" },
-      { id: 5, text: "A square has a side of 8 cm. What is its area?", answer: "64 cm\xB2" },
-      { id: 6, text: "Calculate the circumference of a circle with diameter 10 cm. (Use \u03C0 \u2248 3.14)", answer: "31.4 cm" },
-      { id: 7, text: "Calculate the area of a circle with radius 5 cm. (Use \u03C0 \u2248 3.14)", answer: "78.5 cm\xB2" },
-      { id: 8, text: "Convert 3.5 km to metres.", answer: "3,500 m" },
-      { id: 9, text: "Convert 2,400 ml to litres.", answer: "2.4 litres" },
-      { id: 10, text: "A cuboid has length 5 cm, width 3 cm, and height 4 cm. What is its volume?", answer: "60 cm\xB3" },
-      { id: 11, text: "Name the type of triangle with all sides equal.", answer: "Equilateral triangle" },
-      { id: 12, text: "What is the name of an angle greater than 90\xB0 but less than 180\xB0?", answer: "Obtuse angle" },
-      { id: 13, text: "Two angles on a straight line add up to how many degrees?", answer: "180\xB0" },
-      { id: 14, text: "A parallelogram has a base of 9 cm and a height of 5 cm. What is its area?", answer: "45 cm\xB2" },
-      { id: 15, text: "How many faces does a triangular prism have?", answer: "5" },
-      { id: 16, text: "Convert 450 cm\xB2 to m\xB2.", answer: "0.045 m\xB2" },
-      { id: 17, text: "What is the sum of interior angles of a pentagon?", answer: "540\xB0" },
-      { id: 18, text: "A map has a scale of 1:50,000. A distance of 4 cm on the map represents how many km in real life?", answer: "2 km" },
-      { id: 19, text: "Calculate the area of a trapezium with parallel sides of 6 cm and 10 cm and a height of 4 cm.", answer: "32 cm\xB2" },
-      { id: 20, text: "A cylinder has radius 3 cm and height 10 cm. Calculate its volume. (Use \u03C0 \u2248 3.14)", answer: "282.6 cm\xB3" }
-    ]
-  }
-];
-var ENGLISH_YEAR_6 = [
-  {
-    promptType: "Creative storytelling",
-    title: "The Door at the End of the Garden",
-    prompt: "At the bottom of your garden, hidden behind overgrown ivy, you discover a small wooden door you have never noticed before. When you push it open, you step into a world that is completely different from your own. Describe what you see, hear, and feel as you explore this mysterious place \u2014 and what happens when you realise you are not alone.",
-    hints: [
-      "Use your senses \u2014 what do you see, hear, smell, and feel?",
-      "Build tension by describing the door before opening it.",
-      "Give your world a clear and vivid atmosphere (magical, eerie, peaceful).",
-      "Include at least one unexpected discovery.",
-      "End with a moment that makes the reader want to know what happens next."
-    ],
-    vocabularyWords: ["iridescent", "labyrinthine", "ethereal", "luminescent", "trepidation"]
-  },
-  {
-    promptType: "Descriptive writing",
-    title: "A Market at Dawn",
-    prompt: "Describe the scene as a busy market comes to life at dawn. Traders are setting up their stalls, the smell of fresh bread drifts through the air, and the first customers are beginning to arrive. Use vivid language to bring the sights, sounds, and smells of the market to life for your reader.",
-    hints: [
-      "Open with a strong image that sets the scene immediately.",
-      "Use a variety of sentence lengths for effect.",
-      "Include specific details \u2014 colours, textures, sounds.",
-      "Use figurative language such as similes and metaphors.",
-      "End with a detail that captures the energy of the market."
-    ],
-    vocabularyWords: ["bustling", "aromatic", "cacophony", "vibrant", "pungent"]
-  }
-];
-var ENGLISH_YEAR_7 = [
-  {
-    promptType: "Persuasive writing",
-    title: "Should Schools Teach Financial Skills?",
-    prompt: "Write a persuasive article for your school newspaper arguing that all secondary schools should teach students how to manage money, understand debt, and plan for the future. Use evidence, examples, and persuasive techniques to convince your readers.",
-    hints: [
-      "Open with a powerful statement or rhetorical question.",
-      "Use the rule of three for emphasis.",
-      "Include a counter-argument and then dismiss it.",
-      "Use statistics or examples to support your points.",
-      "End with a strong call to action."
-    ],
-    vocabularyWords: ["indispensable", "fiscal", "prudent", "empowerment", "consequence"]
-  },
-  {
-    promptType: "Descriptive writing",
-    title: "The Abandoned Fairground",
-    prompt: "You are standing at the entrance of an old fairground that has been closed for twenty years. Rusted rides creak in the wind, faded signs hang at angles, and weeds push through the cracked tarmac. Write a vivid description of the scene, capturing the atmosphere of a place that was once full of joy but is now forgotten.",
-    hints: [
-      "Use pathetic fallacy \u2014 let the weather reflect the mood.",
-      "Contrast what the place is now with what it once was.",
-      "Use personification to bring the decaying objects to life.",
-      "Vary your sentence structure for dramatic effect.",
-      "Choose precise, evocative vocabulary rather than generic words."
-    ],
-    vocabularyWords: ["desolate", "dilapidated", "melancholy", "spectral", "corroded"]
-  }
-];
 function pickRandom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
@@ -671,6 +555,162 @@ function getEmergencyEnglishTemplate(yearGroup) {
   const bank = yearGroup >= 7 ? ENGLISH_YEAR_7 : ENGLISH_YEAR_6;
   return pickRandom(bank);
 }
+var MATHS_YEAR_6, MATHS_YEAR_7, ENGLISH_YEAR_6, ENGLISH_YEAR_7;
+var init_emergencyTemplates = __esm({
+  "server/emergencyTemplates.ts"() {
+    "use strict";
+    MATHS_YEAR_6 = [
+      {
+        topic: "Arithmetic and Number",
+        questions: [
+          { id: 1, text: "Calculate 348 + 276", answer: "624" },
+          { id: 2, text: "Calculate 503 \u2212 187", answer: "316" },
+          { id: 3, text: "Calculate 24 \xD7 7", answer: "168" },
+          { id: 4, text: "Calculate 144 \xF7 12", answer: "12" },
+          { id: 5, text: "What is 50% of 240?", answer: "120" },
+          { id: 6, text: "Round 3,847 to the nearest hundred.", answer: "3,800" },
+          { id: 7, text: "Write the next two numbers in the sequence: 4, 8, 16, 32, __, __", answer: "64, 128" },
+          { id: 8, text: "What is 3/4 of 48?", answer: "36" },
+          { id: 9, text: "A bag of apples costs \xA31.35. How much do 4 bags cost?", answer: "\xA35.40" },
+          { id: 10, text: "Write 0.75 as a fraction in its simplest form.", answer: "3/4" },
+          { id: 11, text: "What is 25% of 160?", answer: "40" },
+          { id: 12, text: "Calculate 1,000 \u2212 364", answer: "636" },
+          { id: 13, text: "A rectangle has a length of 9 cm and a width of 5 cm. What is its area?", answer: "45 cm\xB2" },
+          { id: 14, text: "List all the factors of 24.", answer: "1, 2, 3, 4, 6, 8, 12, 24" },
+          { id: 15, text: "A train journey takes 1 hour 45 minutes. If the train departs at 09:20, when does it arrive?", answer: "11:05" }
+        ]
+      },
+      {
+        topic: "Fractions and Decimals",
+        questions: [
+          { id: 1, text: "Add: 1/4 + 1/2", answer: "3/4" },
+          { id: 2, text: "Subtract: 3/4 \u2212 1/4", answer: "1/2" },
+          { id: 3, text: "Write 2/5 as a decimal.", answer: "0.4" },
+          { id: 4, text: "Write 0.6 as a fraction in its simplest form.", answer: "3/5" },
+          { id: 5, text: "Order these decimals from smallest to largest: 0.7, 0.07, 0.71, 0.17", answer: "0.07, 0.17, 0.7, 0.71" },
+          { id: 6, text: "What is 1/3 of 90?", answer: "30" },
+          { id: 7, text: "Calculate 0.4 \xD7 5", answer: "2.0" },
+          { id: 8, text: "A pizza is cut into 8 equal slices. Sam eats 3 slices. What fraction is left?", answer: "5/8" },
+          { id: 9, text: "Write 3/10 as a percentage.", answer: "30%" },
+          { id: 10, text: "Calculate 2.5 + 1.75", answer: "4.25" },
+          { id: 11, text: "What is 10% of 350?", answer: "35" },
+          { id: 12, text: "Simplify 6/9 to its lowest terms.", answer: "2/3" },
+          { id: 13, text: "Calculate 4.8 \u2212 2.3", answer: "2.5" },
+          { id: 14, text: "Write 7/20 as a decimal.", answer: "0.35" },
+          { id: 15, text: "A jug holds 1.5 litres. How many 250 ml glasses can be filled from it?", answer: "6" }
+        ]
+      }
+    ];
+    MATHS_YEAR_7 = [
+      {
+        topic: "Algebra and Number",
+        questions: [
+          { id: 1, text: "Simplify: 3x + 5x", answer: "8x" },
+          { id: 2, text: "Solve: x + 7 = 15", answer: "x = 8" },
+          { id: 3, text: "Solve: 3x = 21", answer: "x = 7" },
+          { id: 4, text: "Calculate: (\u22123) + (\u22125)", answer: "\u22128" },
+          { id: 5, text: "Calculate: (\u22124) \xD7 3", answer: "\u221212" },
+          { id: 6, text: "Find the value of 2x + 3 when x = 4", answer: "11" },
+          { id: 7, text: "Write 48 as a product of its prime factors.", answer: "2\xB3 \xD7 3 (or 2 \xD7 2 \xD7 2 \xD7 3)" },
+          { id: 8, text: "Find the HCF of 12 and 18.", answer: "6" },
+          { id: 9, text: "Find the LCM of 4 and 6.", answer: "12" },
+          { id: 10, text: "Calculate 15% of 200.", answer: "30" },
+          { id: 11, text: "A shirt costs \xA340 and is reduced by 20%. What is the sale price?", answer: "\xA332" },
+          { id: 12, text: "Expand: 3(x + 4)", answer: "3x + 12" },
+          { id: 13, text: "Solve: 2x \u2212 3 = 11", answer: "x = 7" },
+          { id: 14, text: "Calculate: 2\xB3 + 3\xB2", answer: "17" },
+          { id: 15, text: "A car travels 120 km in 2 hours. What is its average speed?", answer: "60 km/h" },
+          { id: 16, text: "Simplify: 4a + 2b \u2212 a + 3b", answer: "3a + 5b" },
+          { id: 17, text: "What is the square root of 144?", answer: "12" },
+          { id: 18, text: "Convert 3/8 to a decimal.", answer: "0.375" },
+          { id: 19, text: "A rectangle has a perimeter of 36 cm and a length of 11 cm. What is its width?", answer: "7 cm" },
+          { id: 20, text: "Calculate the area of a triangle with base 10 cm and height 6 cm.", answer: "30 cm\xB2" }
+        ]
+      },
+      {
+        topic: "Geometry and Measurement",
+        questions: [
+          { id: 1, text: "What do the angles in a triangle add up to?", answer: "180\xB0" },
+          { id: 2, text: "What do the angles in a quadrilateral add up to?", answer: "360\xB0" },
+          { id: 3, text: "Find the missing angle in a triangle where the other two angles are 65\xB0 and 72\xB0.", answer: "43\xB0" },
+          { id: 4, text: "A square has a side of 8 cm. What is its perimeter?", answer: "32 cm" },
+          { id: 5, text: "A square has a side of 8 cm. What is its area?", answer: "64 cm\xB2" },
+          { id: 6, text: "Calculate the circumference of a circle with diameter 10 cm. (Use \u03C0 \u2248 3.14)", answer: "31.4 cm" },
+          { id: 7, text: "Calculate the area of a circle with radius 5 cm. (Use \u03C0 \u2248 3.14)", answer: "78.5 cm\xB2" },
+          { id: 8, text: "Convert 3.5 km to metres.", answer: "3,500 m" },
+          { id: 9, text: "Convert 2,400 ml to litres.", answer: "2.4 litres" },
+          { id: 10, text: "A cuboid has length 5 cm, width 3 cm, and height 4 cm. What is its volume?", answer: "60 cm\xB3" },
+          { id: 11, text: "Name the type of triangle with all sides equal.", answer: "Equilateral triangle" },
+          { id: 12, text: "What is the name of an angle greater than 90\xB0 but less than 180\xB0?", answer: "Obtuse angle" },
+          { id: 13, text: "Two angles on a straight line add up to how many degrees?", answer: "180\xB0" },
+          { id: 14, text: "A parallelogram has a base of 9 cm and a height of 5 cm. What is its area?", answer: "45 cm\xB2" },
+          { id: 15, text: "How many faces does a triangular prism have?", answer: "5" },
+          { id: 16, text: "Convert 450 cm\xB2 to m\xB2.", answer: "0.045 m\xB2" },
+          { id: 17, text: "What is the sum of interior angles of a pentagon?", answer: "540\xB0" },
+          { id: 18, text: "A map has a scale of 1:50,000. A distance of 4 cm on the map represents how many km in real life?", answer: "2 km" },
+          { id: 19, text: "Calculate the area of a trapezium with parallel sides of 6 cm and 10 cm and a height of 4 cm.", answer: "32 cm\xB2" },
+          { id: 20, text: "A cylinder has radius 3 cm and height 10 cm. Calculate its volume. (Use \u03C0 \u2248 3.14)", answer: "282.6 cm\xB3" }
+        ]
+      }
+    ];
+    ENGLISH_YEAR_6 = [
+      {
+        promptType: "Creative storytelling",
+        title: "The Door at the End of the Garden",
+        prompt: "At the bottom of your garden, hidden behind overgrown ivy, you discover a small wooden door you have never noticed before. When you push it open, you step into a world that is completely different from your own. Describe what you see, hear, and feel as you explore this mysterious place \u2014 and what happens when you realise you are not alone.",
+        hints: [
+          "Use your senses \u2014 what do you see, hear, smell, and feel?",
+          "Build tension by describing the door before opening it.",
+          "Give your world a clear and vivid atmosphere (magical, eerie, peaceful).",
+          "Include at least one unexpected discovery.",
+          "End with a moment that makes the reader want to know what happens next."
+        ],
+        vocabularyWords: ["iridescent", "labyrinthine", "ethereal", "luminescent", "trepidation"]
+      },
+      {
+        promptType: "Descriptive writing",
+        title: "A Market at Dawn",
+        prompt: "Describe the scene as a busy market comes to life at dawn. Traders are setting up their stalls, the smell of fresh bread drifts through the air, and the first customers are beginning to arrive. Use vivid language to bring the sights, sounds, and smells of the market to life for your reader.",
+        hints: [
+          "Open with a strong image that sets the scene immediately.",
+          "Use a variety of sentence lengths for effect.",
+          "Include specific details \u2014 colours, textures, sounds.",
+          "Use figurative language such as similes and metaphors.",
+          "End with a detail that captures the energy of the market."
+        ],
+        vocabularyWords: ["bustling", "aromatic", "cacophony", "vibrant", "pungent"]
+      }
+    ];
+    ENGLISH_YEAR_7 = [
+      {
+        promptType: "Persuasive writing",
+        title: "Should Schools Teach Financial Skills?",
+        prompt: "Write a persuasive article for your school newspaper arguing that all secondary schools should teach students how to manage money, understand debt, and plan for the future. Use evidence, examples, and persuasive techniques to convince your readers.",
+        hints: [
+          "Open with a powerful statement or rhetorical question.",
+          "Use the rule of three for emphasis.",
+          "Include a counter-argument and then dismiss it.",
+          "Use statistics or examples to support your points.",
+          "End with a strong call to action."
+        ],
+        vocabularyWords: ["indispensable", "fiscal", "prudent", "empowerment", "consequence"]
+      },
+      {
+        promptType: "Descriptive writing",
+        title: "The Abandoned Fairground",
+        prompt: "You are standing at the entrance of an old fairground that has been closed for twenty years. Rusted rides creak in the wind, faded signs hang at angles, and weeds push through the cracked tarmac. Write a vivid description of the scene, capturing the atmosphere of a place that was once full of joy but is now forgotten.",
+        hints: [
+          "Use pathetic fallacy \u2014 let the weather reflect the mood.",
+          "Contrast what the place is now with what it once was.",
+          "Use personification to bring the decaying objects to life.",
+          "Vary your sentence structure for dramatic effect.",
+          "Choose precise, evocative vocabulary rather than generic words."
+        ],
+        vocabularyWords: ["desolate", "dilapidated", "melancholy", "spectral", "corroded"]
+      }
+    ];
+  }
+});
 
 // server/providers.ts
 async function callOpenAI(req) {
@@ -790,11 +830,6 @@ async function callGemini(req) {
   const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
   return { content, provider: "gemini", model };
 }
-var PROVIDERS = [
-  { name: "openai", call: callOpenAI },
-  { name: "claude", call: callClaude },
-  { name: "gemini", call: callGemini }
-];
 async function invokeWithFallback(req, validate) {
   const attempted = [];
   const allErrors = [];
@@ -831,57 +866,20 @@ async function invokeWithFallback(req, validate) {
 ${allErrors.join("\n")}`
   );
 }
+var PROVIDERS;
+var init_providers = __esm({
+  "server/providers.ts"() {
+    "use strict";
+    init_env();
+    PROVIDERS = [
+      { name: "openai", call: callOpenAI },
+      { name: "claude", call: callClaude },
+      { name: "gemini", call: callGemini }
+    ];
+  }
+});
 
 // server/validation.ts
-var AMERICAN_SPELLINGS = {
-  "math ": "maths ",
-  "math.": "maths.",
-  "math,": "maths,",
-  "math\n": "maths\n",
-  "color": "colour",
-  "flavor": "flavour",
-  "honor": "honour",
-  "humor": "humour",
-  "neighbor": "neighbour",
-  "center": "centre",
-  "theater": "theatre",
-  "meter ": "metre ",
-  "liter": "litre",
-  "organize": "organise",
-  "recognize": "recognise",
-  "analyze": "analyse",
-  "apologize": "apologise",
-  "realize": "realise",
-  "traveling": "travelling",
-  "canceled": "cancelled",
-  "labeled": "labelled",
-  "modeled": "modelled",
-  "defense": "defence",
-  "offense": "offence",
-  "license ": "licence ",
-  "practice ": "practise ",
-  // verb form
-  "gray": "grey",
-  "program ": "programme ",
-  "aluminum": "aluminium",
-  "catalog": "catalogue",
-  "dialog ": "dialogue ",
-  "fulfill": "fulfil",
-  "skillful": "skilful",
-  "enrollment": "enrolment",
-  "jewelry": "jewellery",
-  "pajamas": "pyjamas",
-  "tire ": "tyre ",
-  "curb ": "kerb ",
-  "mom ": "mum ",
-  "mom,": "mum,",
-  "mom.": "mum.",
-  "mom!": "mum!",
-  "mom?": "mum?",
-  "gotten": "got",
-  "fall ": "autumn "
-  // seasonal context
-};
 function checkBritishEnglish(text2) {
   const lower = text2.toLowerCase();
   const errors = [];
@@ -1030,47 +1028,63 @@ function safeParseJSON(raw) {
     return { data: null, error: `JSON parse error: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
+var AMERICAN_SPELLINGS;
+var init_validation = __esm({
+  "server/validation.ts"() {
+    "use strict";
+    AMERICAN_SPELLINGS = {
+      "math ": "maths ",
+      "math.": "maths.",
+      "math,": "maths,",
+      "math\n": "maths\n",
+      "color": "colour",
+      "flavor": "flavour",
+      "honor": "honour",
+      "humor": "humour",
+      "neighbor": "neighbour",
+      "center": "centre",
+      "theater": "theatre",
+      "meter ": "metre ",
+      "liter": "litre",
+      "organize": "organise",
+      "recognize": "recognise",
+      "analyze": "analyse",
+      "apologize": "apologise",
+      "realize": "realise",
+      "traveling": "travelling",
+      "canceled": "cancelled",
+      "labeled": "labelled",
+      "modeled": "modelled",
+      "defense": "defence",
+      "offense": "offence",
+      "license ": "licence ",
+      "practice ": "practise ",
+      // verb form
+      "gray": "grey",
+      "program ": "programme ",
+      "aluminum": "aluminium",
+      "catalog": "catalogue",
+      "dialog ": "dialogue ",
+      "fulfill": "fulfil",
+      "skillful": "skilful",
+      "enrollment": "enrolment",
+      "jewelry": "jewellery",
+      "pajamas": "pyjamas",
+      "tire ": "tyre ",
+      "curb ": "kerb ",
+      "mom ": "mum ",
+      "mom,": "mum,",
+      "mom.": "mum.",
+      "mom!": "mum!",
+      "mom?": "mum?",
+      "gotten": "got",
+      "fall ": "autumn "
+      // seasonal context
+    };
+  }
+});
 
 // server/aiGeneration.ts
-var MATHS_JSON_SCHEMA = {
-  name: "maths_task",
-  schema: {
-    type: "object",
-    properties: {
-      topic: { type: "string" },
-      questions: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            id: { type: "integer" },
-            text: { type: "string" },
-            answer: { type: "string" }
-          },
-          required: ["id", "text", "answer"],
-          additionalProperties: false
-        }
-      }
-    },
-    required: ["topic", "questions"],
-    additionalProperties: false
-  }
-};
-var ENGLISH_JSON_SCHEMA = {
-  name: "english_task",
-  schema: {
-    type: "object",
-    properties: {
-      promptType: { type: "string" },
-      title: { type: "string" },
-      prompt: { type: "string" },
-      hints: { type: "array", items: { type: "string" } },
-      vocabularyWords: { type: "array", items: { type: "string" } }
-    },
-    required: ["promptType", "title", "prompt", "hints", "vocabularyWords"],
-    additionalProperties: false
-  }
-};
 async function generateMathsTask(params) {
   const focusStr = params.focusAreas.join(", ");
   const historySection = params.recentHistory ? `
@@ -1277,8 +1291,62 @@ async function regenerateEnglishPrompt(params) {
   const result = await generateEnglishTask(params);
   return result.content;
 }
+var MATHS_JSON_SCHEMA, ENGLISH_JSON_SCHEMA;
+var init_aiGeneration = __esm({
+  "server/aiGeneration.ts"() {
+    "use strict";
+    init_emergencyTemplates();
+    init_providers();
+    init_validation();
+    MATHS_JSON_SCHEMA = {
+      name: "maths_task",
+      schema: {
+        type: "object",
+        properties: {
+          topic: { type: "string" },
+          questions: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "integer" },
+                text: { type: "string" },
+                answer: { type: "string" }
+              },
+              required: ["id", "text", "answer"],
+              additionalProperties: false
+            }
+          }
+        },
+        required: ["topic", "questions"],
+        additionalProperties: false
+      }
+    };
+    ENGLISH_JSON_SCHEMA = {
+      name: "english_task",
+      schema: {
+        type: "object",
+        properties: {
+          promptType: { type: "string" },
+          title: { type: "string" },
+          prompt: { type: "string" },
+          hints: { type: "array", items: { type: "string" } },
+          vocabularyWords: { type: "array", items: { type: "string" } }
+        },
+        required: ["promptType", "title", "prompt", "hints", "vocabularyWords"],
+        additionalProperties: false
+      }
+    };
+  }
+});
 
 // server/routers.ts
+var routers_exports = {};
+__export(routers_exports, {
+  appRouter: () => appRouter
+});
+import { TRPCError as TRPCError3 } from "@trpc/server";
+import { z as z2 } from "zod";
 function todayString() {
   return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
 }
@@ -1338,316 +1406,332 @@ async function generateAndSave(params) {
     return { content: ec, meta: result.meta, summary };
   }
 }
-var adminProcedure2 = protectedProcedure.use(({ ctx, next }) => {
-  if (ctx.user.role !== "admin") {
-    throw new TRPCError3({ code: "FORBIDDEN", message: "Parent access required." });
-  }
-  return next({ ctx });
-});
-var studentsRouter = router({
-  list: publicProcedure.query(async () => {
-    return getAllStudents();
-  }),
-  get: publicProcedure.input(z2.object({ id: z2.number() })).query(async ({ input }) => {
-    const student = await getStudentById(input.id);
-    if (!student) throw new TRPCError3({ code: "NOT_FOUND", message: "Student not found." });
-    return student;
-  }),
-  create: adminProcedure2.input(
-    z2.object({
-      name: z2.string().min(1).max(100),
-      yearGroup: z2.number().int().min(1).max(13),
-      age: z2.number().int().min(4).max(18),
-      avatarColour: z2.string().optional()
-    })
-  ).mutation(async ({ input }) => {
-    await createStudent({
-      name: input.name,
-      yearGroup: input.yearGroup,
-      age: input.age,
-      avatarColour: input.avatarColour ?? "#4F46E5",
-      active: "yes"
-    });
-    return { success: true };
-  }),
-  update: adminProcedure2.input(
-    z2.object({
-      id: z2.number(),
-      name: z2.string().min(1).max(100).optional(),
-      yearGroup: z2.number().int().min(1).max(13).optional(),
-      age: z2.number().int().min(4).max(18).optional(),
-      avatarColour: z2.string().optional(),
-      active: z2.enum(["yes", "no"]).optional()
-    })
-  ).mutation(async ({ input }) => {
-    const { id, ...data } = input;
-    await updateStudent(id, data);
-    return { success: true };
-  })
-});
-var settingsRouter = router({
-  get: publicProcedure.input(z2.object({ studentId: z2.number() })).query(async ({ input }) => {
-    const settings = await getSettingsByStudentId(input.studentId);
-    if (!settings) throw new TRPCError3({ code: "NOT_FOUND", message: "Settings not found." });
-    return settings;
-  }),
-  update: adminProcedure2.input(
-    z2.object({
-      studentId: z2.number(),
-      mathsFocusAreas: z2.array(z2.string()),
-      englishWritingStyles: z2.array(z2.string()),
-      questionCount: z2.number().int().min(10).max(30),
-      additionalNotes: z2.string().nullable().optional()
-    })
-  ).mutation(async ({ input }) => {
-    await upsertStudentSettings({
-      studentId: input.studentId,
-      mathsFocusAreas: input.mathsFocusAreas,
-      englishWritingStyles: input.englishWritingStyles,
-      questionCount: input.questionCount,
-      additionalNotes: input.additionalNotes ?? null
-    });
-    return { success: true };
-  })
-});
-var tasksRouter = router({
-  getForDate: publicProcedure.input(
-    z2.object({
-      studentId: z2.number(),
-      date: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      subject: z2.enum(["maths", "english"])
-    })
-  ).query(async ({ input }) => {
-    const task = await getTaskForDate(input.studentId, input.date, input.subject);
-    return task ?? null;
-  }),
-  getDateRange: adminProcedure2.input(
-    z2.object({
-      studentId: z2.number(),
-      startDate: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      endDate: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/)
-    })
-  ).query(async ({ input }) => {
-    return getTasksForDateRange(input.studentId, input.startDate, input.endDate);
-  }),
-  generate: adminProcedure2.input(
-    z2.object({
-      studentId: z2.number(),
-      date: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-      subject: z2.enum(["maths", "english"])
-    })
-  ).mutation(async ({ input }) => {
-    const taskDate = input.date ?? todayString();
-    const student = await getStudentById(input.studentId);
-    if (!student) throw new TRPCError3({ code: "NOT_FOUND", message: "Student not found." });
-    const settings = await getSettingsByStudentId(input.studentId);
-    if (!settings) throw new TRPCError3({ code: "NOT_FOUND", message: "Student settings not found." });
-    const historyContext = await buildHistoryContext(input.studentId, input.subject);
-    const { meta } = await generateAndSave({
-      studentId: input.studentId,
-      studentName: student.name,
-      yearGroup: student.yearGroup,
-      age: student.age,
-      subject: input.subject,
-      taskDate,
-      settings,
-      historyContext
-    });
-    return { success: true, taskDate, meta };
-  }),
-  generateAll: adminProcedure2.input(
-    z2.object({
-      date: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-    })
-  ).mutation(async ({ input }) => {
-    const taskDate = input.date ?? todayString();
-    const allStudents = await getAllStudents();
-    const results = [];
-    for (const student of allStudents) {
-      for (const subject of ["maths", "english"]) {
-        try {
-          const settings = await getSettingsByStudentId(student.id);
-          if (!settings) {
-            results.push({ studentId: student.id, subject, success: false, error: "No settings" });
-            continue;
-          }
-          const historyContext = await buildHistoryContext(student.id, subject);
-          const { meta } = await generateAndSave({
-            studentId: student.id,
-            studentName: student.name,
-            yearGroup: student.yearGroup,
-            age: student.age,
-            subject,
-            taskDate,
-            settings,
-            historyContext
-          });
-          results.push({ studentId: student.id, subject, success: true, meta });
-        } catch (err) {
-          results.push({ studentId: student.id, subject, success: false, error: String(err) });
-        }
+var adminProcedure2, studentsRouter, settingsRouter, tasksRouter, cronRouter, appRouter;
+var init_routers = __esm({
+  "server/routers.ts"() {
+    "use strict";
+    init_const();
+    init_cookies();
+    init_systemRouter();
+    init_trpc();
+    init_db();
+    init_aiGeneration();
+    adminProcedure2 = protectedProcedure.use(({ ctx, next }) => {
+      if (ctx.user.role !== "admin") {
+        throw new TRPCError3({ code: "FORBIDDEN", message: "Parent access required." });
       }
-    }
-    return { results, taskDate };
-  }),
-  regenerateQuestion: adminProcedure2.input(
-    z2.object({
-      taskId: z2.number(),
-      questionId: z2.number()
-    })
-  ).mutation(async ({ input }) => {
-    const db = await Promise.resolve().then(() => (init_db(), db_exports));
-    const { getDb: getDb2 } = db;
-    const drizzleDb = await getDb2();
-    if (!drizzleDb) throw new TRPCError3({ code: "INTERNAL_SERVER_ERROR" });
-    const { dailyTasks: dailyTasks2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-    const { eq: eq2 } = await import("drizzle-orm");
-    const rows = await drizzleDb.select().from(dailyTasks2).where(eq2(dailyTasks2.id, input.taskId)).limit(1);
-    const task = rows[0];
-    if (!task) throw new TRPCError3({ code: "NOT_FOUND" });
-    const student = await getStudentById(task.studentId);
-    if (!student) throw new TRPCError3({ code: "NOT_FOUND" });
-    const mathsContent = task.content;
-    const existingTexts = mathsContent.questions.map((q) => q.text);
-    const newQ = await regenerateSingleQuestion({
-      studentName: student.name,
-      yearGroup: student.yearGroup,
-      questionNumber: input.questionId,
-      topic: mathsContent.topic ?? "Mixed",
-      existingQuestions: existingTexts
+      return next({ ctx });
     });
-    const updatedQuestions = mathsContent.questions.map(
-      (q) => q.id === input.questionId ? { ...q, text: newQ.text, answer: newQ.answer } : q
-    );
-    const updatedContent = { ...mathsContent, questions: updatedQuestions };
-    await updateTaskContent(input.taskId, updatedContent);
-    return { success: true, question: { id: input.questionId, ...newQ } };
-  }),
-  regenerateEnglish: adminProcedure2.input(z2.object({ taskId: z2.number() })).mutation(async ({ input }) => {
-    const db = await Promise.resolve().then(() => (init_db(), db_exports));
-    const { getDb: getDb2 } = db;
-    const drizzleDb = await getDb2();
-    if (!drizzleDb) throw new TRPCError3({ code: "INTERNAL_SERVER_ERROR" });
-    const { dailyTasks: dailyTasks2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-    const { eq: eq2 } = await import("drizzle-orm");
-    const rows = await drizzleDb.select().from(dailyTasks2).where(eq2(dailyTasks2.id, input.taskId)).limit(1);
-    const task = rows[0];
-    if (!task) throw new TRPCError3({ code: "NOT_FOUND" });
-    const student = await getStudentById(task.studentId);
-    if (!student) throw new TRPCError3({ code: "NOT_FOUND" });
-    const settings = await getSettingsByStudentId(task.studentId);
-    if (!settings) throw new TRPCError3({ code: "NOT_FOUND" });
-    const newContent = await regenerateEnglishPrompt({
-      studentName: student.name,
-      yearGroup: student.yearGroup,
-      age: student.age,
-      writingStyles: settings.englishWritingStyles,
-      additionalNotes: settings.additionalNotes
+    studentsRouter = router({
+      list: publicProcedure.query(async () => {
+        return getAllStudents();
+      }),
+      get: publicProcedure.input(z2.object({ id: z2.number() })).query(async ({ input }) => {
+        const student = await getStudentById(input.id);
+        if (!student) throw new TRPCError3({ code: "NOT_FOUND", message: "Student not found." });
+        return student;
+      }),
+      create: adminProcedure2.input(
+        z2.object({
+          name: z2.string().min(1).max(100),
+          yearGroup: z2.number().int().min(1).max(13),
+          age: z2.number().int().min(4).max(18),
+          avatarColour: z2.string().optional()
+        })
+      ).mutation(async ({ input }) => {
+        await createStudent({
+          name: input.name,
+          yearGroup: input.yearGroup,
+          age: input.age,
+          avatarColour: input.avatarColour ?? "#4F46E5",
+          active: "yes"
+        });
+        return { success: true };
+      }),
+      update: adminProcedure2.input(
+        z2.object({
+          id: z2.number(),
+          name: z2.string().min(1).max(100).optional(),
+          yearGroup: z2.number().int().min(1).max(13).optional(),
+          age: z2.number().int().min(4).max(18).optional(),
+          avatarColour: z2.string().optional(),
+          active: z2.enum(["yes", "no"]).optional()
+        })
+      ).mutation(async ({ input }) => {
+        const { id, ...data } = input;
+        await updateStudent(id, data);
+        return { success: true };
+      })
     });
-    await updateTaskContent(input.taskId, newContent);
-    return { success: true, content: newContent };
-  }),
-  updateContent: adminProcedure2.input(
-    z2.object({
-      taskId: z2.number(),
-      content: z2.unknown()
-    })
-  ).mutation(async ({ input }) => {
-    await updateTaskContent(input.taskId, input.content);
-    return { success: true };
-  }),
-  markReviewed: adminProcedure2.input(z2.object({ taskId: z2.number() })).mutation(async ({ input }) => {
-    await updateTaskStatus(input.taskId, "reviewed");
-    return { success: true };
-  })
-});
-var cronRouter = router({
-  // Generate a single worksheet for one student+subject (fits within serverless timeout)
-  generateOne: publicProcedure.input(z2.object({
-    secret: z2.string(),
-    studentId: z2.number(),
-    subject: z2.enum(["maths", "english"]),
-    taskDate: z2.string().optional()
-  })).mutation(async ({ input }) => {
-    const expectedSecret = process.env.CRON_SECRET ?? "daily-tasks-cron";
-    if (input.secret !== expectedSecret) {
-      throw new TRPCError3({ code: "UNAUTHORIZED", message: "Invalid cron secret." });
-    }
-    const taskDate = input.taskDate ?? todayString();
-    const student = await getStudentById(input.studentId);
-    if (!student) throw new TRPCError3({ code: "NOT_FOUND", message: "Student not found" });
-    const settings = await getSettingsByStudentId(student.id);
-    if (!settings) throw new TRPCError3({ code: "NOT_FOUND", message: "Settings not found" });
-    const historyContext = await buildHistoryContext(student.id, input.subject);
-    const { meta } = await generateAndSave({
-      studentId: student.id,
-      studentName: student.name,
-      yearGroup: student.yearGroup,
-      age: student.age,
-      subject: input.subject,
-      taskDate,
-      settings,
-      historyContext
+    settingsRouter = router({
+      get: publicProcedure.input(z2.object({ studentId: z2.number() })).query(async ({ input }) => {
+        const settings = await getSettingsByStudentId(input.studentId);
+        if (!settings) throw new TRPCError3({ code: "NOT_FOUND", message: "Settings not found." });
+        return settings;
+      }),
+      update: adminProcedure2.input(
+        z2.object({
+          studentId: z2.number(),
+          mathsFocusAreas: z2.array(z2.string()),
+          englishWritingStyles: z2.array(z2.string()),
+          questionCount: z2.number().int().min(10).max(30),
+          additionalNotes: z2.string().nullable().optional()
+        })
+      ).mutation(async ({ input }) => {
+        await upsertStudentSettings({
+          studentId: input.studentId,
+          mathsFocusAreas: input.mathsFocusAreas,
+          englishWritingStyles: input.englishWritingStyles,
+          questionCount: input.questionCount,
+          additionalNotes: input.additionalNotes ?? null
+        });
+        return { success: true };
+      })
     });
-    return { success: true, studentId: student.id, subject: input.subject, taskDate, meta };
-  }),
-  // Trigger daily generation for all students — calls generateOne per worksheet via HTTP
-  triggerDaily: publicProcedure.input(z2.object({ secret: z2.string() })).mutation(async ({ input, ctx }) => {
-    const expectedSecret = process.env.CRON_SECRET ?? "daily-tasks-cron";
-    if (input.secret !== expectedSecret) {
-      throw new TRPCError3({ code: "UNAUTHORIZED", message: "Invalid cron secret." });
-    }
-    const taskDate = todayString();
-    const allStudents = await getAllStudents();
-    const results = [];
-    const host = ctx.req.headers.host ?? "tasks.homeis.fun";
-    const protocol = host.includes("localhost") ? "http" : "https";
-    const baseUrl = `${protocol}://${host}`;
-    const tasks = [];
-    for (const student of allStudents) {
-      for (const subject of ["maths", "english"]) {
-        tasks.push((async () => {
-          try {
-            const resp = await fetch(`${baseUrl}/api/trpc/cron.generateOne`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ json: { secret: input.secret, studentId: student.id, subject, taskDate } }),
-              signal: AbortSignal.timeout(55e3)
-            });
-            const data = await resp.json();
-            if (resp.ok && data.result?.data?.json) {
-              results.push({ studentId: student.id, subject, success: true, meta: data.result.data.json.meta });
-            } else {
-              results.push({ studentId: student.id, subject, success: false, error: data.error?.json?.message ?? `HTTP ${resp.status}` });
+    tasksRouter = router({
+      getForDate: publicProcedure.input(
+        z2.object({
+          studentId: z2.number(),
+          date: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          subject: z2.enum(["maths", "english"])
+        })
+      ).query(async ({ input }) => {
+        const task = await getTaskForDate(input.studentId, input.date, input.subject);
+        return task ?? null;
+      }),
+      getDateRange: adminProcedure2.input(
+        z2.object({
+          studentId: z2.number(),
+          startDate: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          endDate: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        })
+      ).query(async ({ input }) => {
+        return getTasksForDateRange(input.studentId, input.startDate, input.endDate);
+      }),
+      generate: adminProcedure2.input(
+        z2.object({
+          studentId: z2.number(),
+          date: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          subject: z2.enum(["maths", "english"])
+        })
+      ).mutation(async ({ input }) => {
+        const taskDate = input.date ?? todayString();
+        const student = await getStudentById(input.studentId);
+        if (!student) throw new TRPCError3({ code: "NOT_FOUND", message: "Student not found." });
+        const settings = await getSettingsByStudentId(input.studentId);
+        if (!settings) throw new TRPCError3({ code: "NOT_FOUND", message: "Student settings not found." });
+        const historyContext = await buildHistoryContext(input.studentId, input.subject);
+        const { meta } = await generateAndSave({
+          studentId: input.studentId,
+          studentName: student.name,
+          yearGroup: student.yearGroup,
+          age: student.age,
+          subject: input.subject,
+          taskDate,
+          settings,
+          historyContext
+        });
+        return { success: true, taskDate, meta };
+      }),
+      generateAll: adminProcedure2.input(
+        z2.object({
+          date: z2.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        })
+      ).mutation(async ({ input }) => {
+        const taskDate = input.date ?? todayString();
+        const allStudents = await getAllStudents();
+        const results = [];
+        for (const student of allStudents) {
+          for (const subject of ["maths", "english"]) {
+            try {
+              const settings = await getSettingsByStudentId(student.id);
+              if (!settings) {
+                results.push({ studentId: student.id, subject, success: false, error: "No settings" });
+                continue;
+              }
+              const historyContext = await buildHistoryContext(student.id, subject);
+              const { meta } = await generateAndSave({
+                studentId: student.id,
+                studentName: student.name,
+                yearGroup: student.yearGroup,
+                age: student.age,
+                subject,
+                taskDate,
+                settings,
+                historyContext
+              });
+              results.push({ studentId: student.id, subject, success: true, meta });
+            } catch (err) {
+              results.push({ studentId: student.id, subject, success: false, error: String(err) });
             }
-          } catch (err) {
-            results.push({ studentId: student.id, subject, success: false, error: String(err) });
           }
-        })());
-      }
-    }
-    await Promise.all(tasks);
-    return { success: true, taskDate, results };
-  })
-});
-var appRouter = router({
-  system: systemRouter,
-  auth: router({
-    me: publicProcedure.query((opts) => opts.ctx.user),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return { success: true };
-    })
-  }),
-  students: studentsRouter,
-  settings: settingsRouter,
-  tasks: tasksRouter,
-  cron: cronRouter
+        }
+        return { results, taskDate };
+      }),
+      regenerateQuestion: adminProcedure2.input(
+        z2.object({
+          taskId: z2.number(),
+          questionId: z2.number()
+        })
+      ).mutation(async ({ input }) => {
+        const db = await Promise.resolve().then(() => (init_db(), db_exports));
+        const { getDb: getDb2 } = db;
+        const drizzleDb = await getDb2();
+        if (!drizzleDb) throw new TRPCError3({ code: "INTERNAL_SERVER_ERROR" });
+        const { dailyTasks: dailyTasks2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
+        const { eq: eq2 } = await import("drizzle-orm");
+        const rows = await drizzleDb.select().from(dailyTasks2).where(eq2(dailyTasks2.id, input.taskId)).limit(1);
+        const task = rows[0];
+        if (!task) throw new TRPCError3({ code: "NOT_FOUND" });
+        const student = await getStudentById(task.studentId);
+        if (!student) throw new TRPCError3({ code: "NOT_FOUND" });
+        const mathsContent = task.content;
+        const existingTexts = mathsContent.questions.map((q) => q.text);
+        const newQ = await regenerateSingleQuestion({
+          studentName: student.name,
+          yearGroup: student.yearGroup,
+          questionNumber: input.questionId,
+          topic: mathsContent.topic ?? "Mixed",
+          existingQuestions: existingTexts
+        });
+        const updatedQuestions = mathsContent.questions.map(
+          (q) => q.id === input.questionId ? { ...q, text: newQ.text, answer: newQ.answer } : q
+        );
+        const updatedContent = { ...mathsContent, questions: updatedQuestions };
+        await updateTaskContent(input.taskId, updatedContent);
+        return { success: true, question: { id: input.questionId, ...newQ } };
+      }),
+      regenerateEnglish: adminProcedure2.input(z2.object({ taskId: z2.number() })).mutation(async ({ input }) => {
+        const db = await Promise.resolve().then(() => (init_db(), db_exports));
+        const { getDb: getDb2 } = db;
+        const drizzleDb = await getDb2();
+        if (!drizzleDb) throw new TRPCError3({ code: "INTERNAL_SERVER_ERROR" });
+        const { dailyTasks: dailyTasks2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
+        const { eq: eq2 } = await import("drizzle-orm");
+        const rows = await drizzleDb.select().from(dailyTasks2).where(eq2(dailyTasks2.id, input.taskId)).limit(1);
+        const task = rows[0];
+        if (!task) throw new TRPCError3({ code: "NOT_FOUND" });
+        const student = await getStudentById(task.studentId);
+        if (!student) throw new TRPCError3({ code: "NOT_FOUND" });
+        const settings = await getSettingsByStudentId(task.studentId);
+        if (!settings) throw new TRPCError3({ code: "NOT_FOUND" });
+        const newContent = await regenerateEnglishPrompt({
+          studentName: student.name,
+          yearGroup: student.yearGroup,
+          age: student.age,
+          writingStyles: settings.englishWritingStyles,
+          additionalNotes: settings.additionalNotes
+        });
+        await updateTaskContent(input.taskId, newContent);
+        return { success: true, content: newContent };
+      }),
+      updateContent: adminProcedure2.input(
+        z2.object({
+          taskId: z2.number(),
+          content: z2.unknown()
+        })
+      ).mutation(async ({ input }) => {
+        await updateTaskContent(input.taskId, input.content);
+        return { success: true };
+      }),
+      markReviewed: adminProcedure2.input(z2.object({ taskId: z2.number() })).mutation(async ({ input }) => {
+        await updateTaskStatus(input.taskId, "reviewed");
+        return { success: true };
+      })
+    });
+    cronRouter = router({
+      // Generate a single worksheet for one student+subject (fits within serverless timeout)
+      generateOne: publicProcedure.input(z2.object({
+        secret: z2.string(),
+        studentId: z2.number(),
+        subject: z2.enum(["maths", "english"]),
+        taskDate: z2.string().optional()
+      })).mutation(async ({ input }) => {
+        const expectedSecret = process.env.CRON_SECRET ?? "daily-tasks-cron";
+        if (input.secret !== expectedSecret) {
+          throw new TRPCError3({ code: "UNAUTHORIZED", message: "Invalid cron secret." });
+        }
+        const taskDate = input.taskDate ?? todayString();
+        const student = await getStudentById(input.studentId);
+        if (!student) throw new TRPCError3({ code: "NOT_FOUND", message: "Student not found" });
+        const settings = await getSettingsByStudentId(student.id);
+        if (!settings) throw new TRPCError3({ code: "NOT_FOUND", message: "Settings not found" });
+        const historyContext = await buildHistoryContext(student.id, input.subject);
+        const { meta } = await generateAndSave({
+          studentId: student.id,
+          studentName: student.name,
+          yearGroup: student.yearGroup,
+          age: student.age,
+          subject: input.subject,
+          taskDate,
+          settings,
+          historyContext
+        });
+        return { success: true, studentId: student.id, subject: input.subject, taskDate, meta };
+      }),
+      // Trigger daily generation for all students — calls generateOne per worksheet via HTTP
+      triggerDaily: publicProcedure.input(z2.object({ secret: z2.string() })).mutation(async ({ input, ctx }) => {
+        const expectedSecret = process.env.CRON_SECRET ?? "daily-tasks-cron";
+        if (input.secret !== expectedSecret) {
+          throw new TRPCError3({ code: "UNAUTHORIZED", message: "Invalid cron secret." });
+        }
+        const taskDate = todayString();
+        const allStudents = await getAllStudents();
+        const results = [];
+        const host = ctx.req.headers.host ?? "tasks.homeis.fun";
+        const protocol = host.includes("localhost") ? "http" : "https";
+        const baseUrl = `${protocol}://${host}`;
+        const tasks = [];
+        for (const student of allStudents) {
+          for (const subject of ["maths", "english"]) {
+            tasks.push((async () => {
+              try {
+                const resp = await fetch(`${baseUrl}/api/trpc/cron.generateOne`, {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ json: { secret: input.secret, studentId: student.id, subject, taskDate } }),
+                  signal: AbortSignal.timeout(55e3)
+                });
+                const data = await resp.json();
+                if (resp.ok && data.result?.data?.json) {
+                  results.push({ studentId: student.id, subject, success: true, meta: data.result.data.json.meta });
+                } else {
+                  results.push({ studentId: student.id, subject, success: false, error: data.error?.json?.message ?? `HTTP ${resp.status}` });
+                }
+              } catch (err) {
+                results.push({ studentId: student.id, subject, success: false, error: String(err) });
+              }
+            })());
+          }
+        }
+        await Promise.all(tasks);
+        return { success: true, taskDate, results };
+      })
+    });
+    appRouter = router({
+      system: systemRouter,
+      auth: router({
+        me: publicProcedure.query((opts) => opts.ctx.user),
+        logout: publicProcedure.mutation(({ ctx }) => {
+          const cookieOptions = getSessionCookieOptions(ctx.req);
+          ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+          return { success: true };
+        })
+      }),
+      students: studentsRouter,
+      settings: settingsRouter,
+      tasks: tasksRouter,
+      cron: cronRouter
+    });
+  }
 });
 
 // api/serverless-entry.ts
+init_routers();
 init_db();
+import "dotenv/config";
+import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import express from "express";
 
 // server/pdfGenerator.ts
 import PDFDocument from "pdfkit";
@@ -1805,6 +1889,9 @@ function generateEnglishPDF(res, studentName, date, content) {
   doc.end();
 }
 
+// server/_core/sdk.ts
+init_const();
+
 // shared/_core/errors.ts
 var HttpError = class extends Error {
   constructor(statusCode, message) {
@@ -1817,6 +1904,7 @@ var ForbiddenError = (msg) => new HttpError(403, msg);
 
 // server/_core/sdk.ts
 init_db();
+init_env();
 import { parse as parseCookieHeader } from "cookie";
 import { SignJWT, jwtVerify } from "jose";
 var SDKServer = class {
@@ -1907,7 +1995,10 @@ async function createContext(opts) {
 }
 
 // server/_core/oauth.ts
+init_const();
 init_db();
+init_cookies();
+init_env();
 function registerAuthRoutes(app2) {
   app2.post("/api/auth/login", async (req, res) => {
     const { password } = req.body ?? {};
@@ -1958,6 +2049,7 @@ function registerAuthRoutes(app2) {
 }
 
 // api/serverless-entry.ts
+init_env();
 function registerAppRoutes(app2) {
   app2.use(express.json({ limit: "50mb" }));
   app2.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -2008,6 +2100,34 @@ function registerAppRoutes(app2) {
       results.gemini = { ok: false, error: String(e) };
     }
     res.json({ version: "68c965d-claude-haiku-4-5-gemini-2.5-flash", envKeys: { openai: !!ENV.openaiApiKey, claude: !!process.env.ANTHROPIC_API_KEY, gemini: !!process.env.GEMINI_API_KEY, openaiUrl: ENV.openaiApiUrl || "(default)" }, results });
+  });
+  app2.get("/api/cron/daily", async (req, res) => {
+    const authHeader = req.headers.authorization ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    const expectedSecret = process.env.CRON_SECRET ?? "daily-tasks-cron";
+    if (token !== expectedSecret) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    try {
+      const { getAllStudents: getAllStudents2, getSettingsByStudentId: getSettingsByStudentId2, buildHistoryContext: buildHistoryContext2, generateAndSave: generateAndSave2 } = await Promise.resolve().then(() => (init_routers(), routers_exports)).then(() => (init_db(), __toCommonJS(db_exports)));
+      const host = req.headers.host ?? "tasks.homeis.fun";
+      const protocol = host.includes("localhost") ? "http" : "https";
+      const baseUrl = `${protocol}://${host}`;
+      const resp = await fetch(`${baseUrl}/api/trpc/cron.triggerDaily`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ json: { secret: expectedSecret } }),
+        signal: AbortSignal.timeout(55e3)
+      });
+      const data = await resp.json();
+      const result = data?.result?.data?.json ?? data;
+      console.log("[Cron] Daily generation complete:", JSON.stringify(result));
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error("[Cron] Daily generation failed:", err);
+      res.status(500).json({ ok: false, error: String(err) });
+    }
   });
   app2.get("/api/pdf/:studentId/:subject/:date", async (req, res) => {
     try {

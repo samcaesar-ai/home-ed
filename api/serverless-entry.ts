@@ -69,6 +69,39 @@ function registerAppRoutes(app: ReturnType<typeof express>) {
     res.json({ version: "68c965d-claude-haiku-4-5-gemini-2.5-flash", envKeys: { openai: !!ENV.openaiApiKey, claude: !!process.env.ANTHROPIC_API_KEY, gemini: !!process.env.GEMINI_API_KEY, openaiUrl: ENV.openaiApiUrl || "(default)" }, results });
   });
 
+  // Native Vercel cron endpoint — called by Vercel at 06:00 UTC daily
+  app.get("/api/cron/daily", async (req, res) => {
+    // Vercel passes CRON_SECRET via the Authorization header as Bearer token
+    const authHeader = req.headers.authorization ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    const expectedSecret = process.env.CRON_SECRET ?? "daily-tasks-cron";
+    if (token !== expectedSecret) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    // Fire off all generateOne calls in parallel (same logic as cron.triggerDaily)
+    try {
+      const { getAllStudents, getSettingsByStudentId, buildHistoryContext, generateAndSave } = await import("../server/routers").then(() => require("../server/db"));
+      // Use the tRPC mutation directly via internal fetch
+      const host = req.headers.host ?? "tasks.homeis.fun";
+      const protocol = host.includes("localhost") ? "http" : "https";
+      const baseUrl = `${protocol}://${host}`;
+      const resp = await fetch(`${baseUrl}/api/trpc/cron.triggerDaily`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ json: { secret: expectedSecret } }),
+        signal: AbortSignal.timeout(55_000),
+      });
+      const data = await resp.json();
+      const result = (data as any)?.result?.data?.json ?? data;
+      console.log("[Cron] Daily generation complete:", JSON.stringify(result));
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error("[Cron] Daily generation failed:", err);
+      res.status(500).json({ ok: false, error: String(err) });
+    }
+  });
+
   app.get("/api/pdf/:studentId/:subject/:date", async (req, res) => {
     try {
       const studentId = parseInt(req.params.studentId, 10);
